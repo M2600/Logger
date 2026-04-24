@@ -184,6 +184,7 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
             "  settings update daemon AI setting\n\n"
             "examples:\n"
             "  python log.py \"fix docker bug\"\n"
+            "  python log.py --gui\n"
             "  python log.py report --period today --format md\n"
             "  python log.py next --llm never --format json\n"
             "  python log.py settings --ai on"
@@ -194,6 +195,7 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-shot", dest="capture_shot", action="store_false", help="Disable screenshot")
     parser.set_defaults(capture_shot=True)
     parser.add_argument("--shot-dir", default=str(DEFAULT_SHOT_DIR), help="Directory for screenshots")
+    parser.add_argument("--gui", action="store_true", help="Force GUI input (ignore message arguments)")
     parser.add_argument("--stdin", action="store_true", help="Read event body from stdin")
     parser.add_argument("--type", default="thought", help="Event type (thought/stdin/git/system/...)")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
@@ -232,6 +234,14 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
 
 
 def resolve_raw_input(args: argparse.Namespace) -> tuple[str, str, str]:
+    if args.gui:
+        raw = ""
+        try:
+            raw = get_gui_input()
+        except Exception:
+            raw = ""
+        clipboard = get_clipboard_text()
+        return raw, "gui", clipboard
     if args.message:
         filtered = [arg for arg in args.message if arg.strip()]
         if filtered:

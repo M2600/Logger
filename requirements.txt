@@ -1,3 +1,4 @@
 pyperclip>=1.8.2
 mss>=9.0.1
 pygetwindow>=0.0.9; platform_system == "Windows"
+requests>=2.31.0

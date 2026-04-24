@@ -234,7 +234,9 @@ def resolve_raw_input(args: argparse.Namespace) -> tuple[str, str, str]:
     if args.message:
         filtered = [arg for arg in args.message if arg.strip()]
         if filtered:
-            return " ".join(filtered), "cli", get_clipboard_text()
+            text = " ".join(filtered)
+            if text.strip():
+                return text, "cli", get_clipboard_text()
     if args.stdin or not sys.stdin.isatty():
         return sys.stdin.read(), "stdin", get_clipboard_text()
     raw = ""
@@ -270,6 +272,10 @@ def print_warnings(payload: Any) -> None:
 
 def post_event(args: argparse.Namespace) -> int:
     raw_text, source, clipboard = resolve_raw_input(args)
+    
+    if not raw_text.strip():
+        print("no message to send", file=sys.stderr)
+        return 1
     
     def process_event() -> None:
         window_title = get_active_window_title()

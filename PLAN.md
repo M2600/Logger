@@ -1,35 +1,281 @@
-# Core-Stream スクリーンショット機能 実装計画
+# 🧠 Core-Stream — 総合設計ドキュメント
 
-## 問題と方針
-- 現状の `log.py` は思考ログを JSONL に保存するのみで、スクリーンショット取得機能は未実装。
-- 新規機能として、マルチプラットフォーム（Windows / macOS / Linux）でスクリーンショットを取得しつつ、**このアプリの入力ウィンドウを写さない**要件を満たす。
-- 安全策として「撮影前に入力ウィンドウを自動で退避（最小化/非表示）→ 少し待って撮影 → 復帰」の順で実装し、OS依存差分は関数分離する。
-- 既定動作は **ログ保存のたびに毎回撮影** とする。
+> **Frictionless Thought Logger for ADHD**
+> 思考速度を阻害しないことを最優先に設計された、思考ログ・自動構造化システム。
 
-## 実装対象
-- `log.py`
-  - CLI引数解析の拡張（例: `--shot` / `--no-shot` / 保存先指定）
-  - スクリーンショット撮影関数の追加（OS別分岐）
-  - GUIモード時に自ウィンドウを写さないための退避制御
-  - ログスキーマ拡張（画像パス・撮影結果フラグ・エラー情報）
-- `README.md`
-  - 新オプション、必要な依存、OS別注意点を追記
-- 依存定義ファイル（未作成なら新規）
-  - 画像取得用ライブラリ（候補: `mss`）と既存依存（`pyperclip`, Windows向け `pygetwindow`）を明示
+---
 
-## Todo
-1. 既存の入力フロー（CLI/GUI）に影響しない形で、スクリーンショット機能の呼び出しタイミングを設計する。
-2. OS別に「アクティブウィンドウ情報取得」と「自ウィンドウ退避」の実装方針を確定する。
-3. スクリーンショット保存（日時ベース命名、保存先ディレクトリ作成、失敗時フォールバック）を実装する。
-4. JSONLレコードにスクリーンショット関連メタ情報を追加する。
-5. READMEに使い方と制約（Wayland等）を追記する。
+## 1. 設計思想（Philosophy）
 
-## 注意点・検討事項
-- Linux は Wayland 環境で `xdotool` が効かないことがあるため、失敗時は安全に `unknown`/`false` を返す。
-- 「アプリのウィンドウを写さない」は、GUI入力ウィンドウのみを対象にする前提で設計する（他アプリ名が同一タイトルの場合の誤除外を避ける）。
+既存のメモアプリ・タスク管理ツールが強要する「綺麗に書くこと」を完全に放棄する。
 
-## 進捗
-- スクリーンショット機能（既定ON）を `log.py` に実装済み。
-- GUI入力ウィンドウは保存前に退避してから撮影する挙動を実装済み。
-- JSONL に `meta.screenshot`（enabled / ok / path / error）を追加済み。
-- `requirements.txt` と `README.md` を更新済み。
+### Frictionless Input
+思考速度はタイピング速度を上回る。以下を排除する。
+
+- GUI起動
+- プロジェクト選択
+- タグ入力
+- ノート構造整理
+
+入力は **1コマンドのみ**。
+
+```bash
+l "idea about scheduler"
+```
+
+### Context-Aware Logging
+ユーザーは文脈を入力しなくてよい。システムが自動取得する。
+
+- `cwd`（カレントディレクトリ）
+- `git repo / branch / commit`
+- アクティブウィンドウ名
+- ブラウザのタブ名
+- `timestamp`
+
+### Fire-and-Forget
+入力後は**即終了**。AIの応答を待たない。
+
+```
+入力 → POST /events → 200 OK → CLI終了
+```
+
+タイムアウト目標: **< 200ms**
+
+### Chaos → Order
+「入力」と「整理」をアーキテクチャレベルで分離する。
+
+```
+Human  →  カオスな断片を投げるだけ
+LLM    →  分類・要約・構造化を自動実行
+```
+
+---
+
+## 2. システムアーキテクチャ
+
+採用モデル: **Client-Daemon Architecture**（Ollamaライクな構成）
+
+```
+CLI (l)
+   ↓  POST /events
+Daemon API (FastAPI)
+   ↓  即時保存
+JSONL Event Store
+   ↓  非同期キュー
+LLM Worker (Ollama)
+```
+
+---
+
+### 2.1 CLI Client（`l` コマンド）
+
+**役割:** 入力受け付けとコンテキスト収集に特化した超軽量プログラム。
+
+| モード | 例 |
+|---|---|
+| 非対話モード | `l "fix docker bug"` |
+| 対話モード | `l`（簡易入力UI） |
+| stdinモード | `git diff \| l` / `pytest \| l` / `cat error.log \| l` |
+
+stdinモードにより、開発ログ・システムログ・コマンドログをそのまま記録可能。
+
+---
+
+### 2.2 Daemon / APIサーバー（FastAPI）
+
+**役割:** バックグラウンド常駐。データの確実な保存と重い処理のスケジューリングを担うハブ。
+
+処理フロー:
+
+```
+POST /events 受信
+↓
+JSONL へ即時追記
+↓
+200 OK 返却（クライアントを待たせない）
+↓
+analysis_job を非同期キューへ積む
+↓
+自身のペースでLLMワーカーへ渡す
+```
+
+---
+
+### 2.3 Event Store（JSONL）
+
+ログではなく **Event Stream** として保存する。1イベント1行のJSONL形式。
+
+**レコード構造**
+
+| フィールド | 説明 |
+|---|---|
+| `id` | ユニークID |
+| `type` | イベント種別 |
+| `body` | 生テキスト |
+| `context` | 自動収集コンテキスト（JSON object） |
+| `created_at` | タイムスタンプ |
+
+**event type 一覧**
+
+| type | 説明 |
+|---|---|
+| `thought` | 通常の思考ログ |
+| `stdin` | パイプ入力（git diff等） |
+| `git` | Git hookからの自動記録 |
+| `voice` | 音声入力（将来対応） |
+| `browser` | ブラウザタブ情報 |
+| `system` | システムイベント |
+
+---
+
+### 2.4 LLM Worker（Ollama連携）
+
+**役割:** 生ログとコンテキストを読み解き、分類・要約・TODO抽出を行う。
+
+**別プロセス分離の理由:**
+
+- APIを軽量に保つ
+- GPUマシンへ分離可能（Raspberry Pi + メインPC構成）
+- 複数ワーカーの並列化が可能
+
+**analysis_jobs（JSONL）**
+
+| カラム | 説明 |
+|---|---|
+| `id` | ジョブID |
+| `event_id` | 対象イベント |
+| `status` | `pending / processing / done / failed` |
+| `priority` | 優先度 |
+| `model` | 使用モデル名 |
+| `created_at` | 作成日時 |
+
+**priority queue（優先度設定例）**
+
+| type | priority |
+|---|---|
+| `thought` | high |
+| `voice` | medium |
+| `stdin` log | low |
+
+---
+
+## 3. コンテキスト自動収集
+
+| カテゴリ | 収集項目 |
+|---|---|
+| Environment | `cwd`, `hostname`, `timestamp` |
+| Git | `repo`, `branch`, `commit` |
+| Shell | `last_command` |
+
+---
+
+## 4. Git Hook Integration
+
+Git の `post-commit` hook を利用し、コミット情報を自動ログとして記録する。
+
+```
+commit
+↓
+commit hash / branch / message 取得
+↓
+l コマンドへ自動送信
+```
+
+これにより **「思考 → コード → commit」の因果関係** がログとして保存される。
+
+---
+
+## 5. LLM分析内容
+
+| 処理 | 内容 |
+|---|---|
+| classification | `bug / idea / task / note` への分類 |
+| TODO extraction | ログから「疑問」「バグ」「やり残し」を抽出 |
+| summarization | 指定期間の要約生成 |
+| thought linking | 思考とcommitとbugfixの関連付け |
+
+**再分析設計:** LLM分析は1回で終わらない。新モデルやプロンプト改善に対応するため、`analysis_runs.jsonl` で分析履歴を管理する。
+
+```
+analysis_runs.jsonl
+  event_id / model / result / created_at
+```
+
+---
+
+## 6. アウトプット設計（CLIオプション）
+
+インプット側と同様、アウトプットも **CLIで完結** させる。
+
+### `l report` — 日報・報告用
+
+- **対象:** 他者向け（上司・チーム等）
+- **内容:** 完了した事実を時系列でまとめたMarkdown
+- **フォーマット:** プロジェクトごとに整理された綺麗なレポート
+
+### `l next` — 自分向け確認用
+
+- **対象:** 自分自身
+- **内容:** 未完了タスク・疑問点・やり残しのチェックリスト
+- **フォーマット:** チェックボックス形式のTODOリスト
+
+**実装方針（検討中）:**
+- 同じログデータを使いつつ、**プロンプトを用途別に分ける**
+- `report用プロンプト` と `next用プロンプト` をワーカー側で管理
+- または、ログの分類・構造化までワーカーが担当し、**出力フォーマットはクライアント側でリクエスト時に指定**
+
+---
+
+## 7. AI処理のオン/オフ制御
+
+デーモン側に設定APIを持たせ、AI処理を一時停止できる。
+
+- 重いゲームや別開発中 → AI処理を停止、ログはJSONLに蓄積
+- 後から一気にバッチ処理
+
+---
+
+## 8. 検索機能
+
+推奨構成: **Hybrid Search**
+
+| 方式 | 技術 | 用途 |
+|---|---|---|
+| キーワード検索 | JSONL全文grep / FTS5（将来移行時） | 正確な語句検索 |
+| セマンティック検索 | Vector DB（ChromaDB等） | 意味合いでの類似検索 |
+
+---
+
+## 9. 拡張ロードマップ
+
+| Phase | 内容 |
+|---|---|
+| Phase 1（MVP） | CLI + Daemon + JSONL + LLM Worker |
+| Phase 2 | 音声入力（Whisper統合）。スマホからのボイスメモを同じ思考ストリームへ |
+| Phase 3 | 分散構成。ログ収集はRaspberry Pi、LLM推論はGPUマシン |
+| Phase 4 | Vector DB導入による意味検索強化 |
+| Phase 5 | セッション機能。`session_id` で同一作業セッションのログを紐付け・グルーピング |
+
+---
+
+## 10. このプロジェクトの位置づけ
+
+| 比較対象 | 違い |
+|---|---|
+| Roam Research / Logseq | あちらは「手動ナレッジ管理」。Core-Streamは「自動思考ストリーム記録」 |
+| Apache Kafka | 思想的に近い。ただし対象は人間の思考 |
+
+---
+
+## まとめ
+
+```
+Thought Logger
++
+Event Stream
++
+AI Structuring
+```
+
+**入力はfrictionless、整理はAI自動化。**
+思考を止めない、ただそれだけのために設計されたシステム。

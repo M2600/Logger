@@ -1,5 +1,7 @@
-# Logger
-Daily logger for ADHD
+# Logger (Core-Stream MVP)
+
+`log.py` をクライアント、`daemon.py` を常駐APIとして分離した構成です。  
+クライアントは入力とコンテキスト収集だけを行い、デーモンが保存・非同期分析・レポート生成を担当します。
 
 ## Setup
 
@@ -10,60 +12,67 @@ python -m pip install -r requirements.txt
 Linux ではアクティブウィンドウ名取得に `xdotool` が必要です。  
 macOS は `osascript`、Windows は `pygetwindow` を利用します。
 
-## Usage
+## 1. Start daemon
+
+```bash
+python daemon.py --host 127.0.0.1 --port 8765 --model gemma2
+```
+
+主な保存先:
+
+- events: `~/thought_stream.jsonl`
+- classify cache: `~/.core_stream_classified.jsonl`
+- analysis jobs: `~/.core_stream_analysis_jobs.jsonl`
+- reports: `./reports/`
+
+## 2. Send logs from client
 
 ```bash
 # CLI入力
-python log.py "今の思考"
+python log.py "fix docker bug"
 
 # GUI入力（引数なし）
 python log.py
+
+# stdin入力
+git diff | python log.py --stdin --type stdin
 ```
 
-既定でログ保存時に毎回スクリーンショットを撮影し、`~/thought_stream_shots` に保存します。  
-スクリーンショットを無効化する場合:
+既定でスクリーンショットを撮影します。無効化:
 
 ```bash
-python log.py --no-shot "スクショ不要のログ"
+python log.py --no-shot "no screenshot"
 ```
 
-保存先を変更する場合:
+保存先を変更:
 
 ```bash
-python log.py --shot-dir ~/my_shots "保存先指定"
+python log.py --shot-dir ~/my_shots "custom shot dir"
 ```
 
-## Analyze logs (split classify/report)
-
-`analyze.py` は「分類」と「レポート生成」を分離しています。
-
-1. `classify`: 新規ログだけを LLM で分類し、キャッシュ (`~/.core_stream_classified.jsonl`) に追記  
-2. `report`: 分類済みキャッシュからレポート/Todoを生成（静的処理中心、必要時のみLLM整形）
-
-分類キーは `ctx.cwd` を優先し、欠損時に `ctx.page_title` / `ctx.win` / `meta.project_hint` を使います。  
-事前に Ollama を起動し、モデルを取得してください（例: `ollama run gemma2`）。
+## 3. Generate outputs
 
 ```bash
-# 1回だけ分類（重複ログは自動スキップ）
-python analyze.py classify --model gemma2
+# 日報
+python log.py report --period today --format both
 
-# 定期分類（60秒ごと）
-python analyze.py classify --interval 60 --model gemma2
-
-# 今日の進捗レポート（分類キャッシュから生成）
-python analyze.py report --period today --mode report --format both
-
-# Todo抽出（静的のみ: LLM未使用）
-python analyze.py report --period week --mode todo --format json --llm never
-
-# 件数が多い時だけLLM整形（auto）
-python analyze.py report --period week --mode report --llm auto --llm-threshold 60
+# 次アクション（todo）
+python log.py next --period week --llm never --format md
 ```
 
-`report` の出力はコンソール表示され、同時に `reports/` 配下へ日付付き保存されます。  
-`--stdout` と `--format json` を併用すると、API連携向けに機械可読JSONをそのままパイプしやすくなります。
+## 4. Daemon settings
 
-## Notes
+```bash
+# AI処理ON/OFF
+python log.py settings --ai on
+python log.py settings --ai off
+```
 
-- アプリの GUI 入力ウィンドウは撮影前に退避してから保存します。
-- Wayland 環境などではウィンドウ情報取得や撮影が制限される場合があり、その場合もログ保存は継続します。
+## HTTP endpoints (daemon)
+
+- `GET /health`
+- `GET /settings`
+- `POST /settings/ai`
+- `POST /events`
+- `POST /analyze/backfill`
+- `POST /reports/generate`

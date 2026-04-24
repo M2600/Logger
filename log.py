@@ -222,11 +222,8 @@ def capture_screenshot(output_path: Path) -> tuple[bool, str, str]:
         return False, "unknown", f"mss import failed: {exc}"
 
     try:
-        mss_factory = getattr(mss, "MSS", None) or getattr(mss, "mss", None)
-        if mss_factory is None:
-            return False, "unknown", "mss backend unavailable: missing MSS/mss constructor"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with mss_factory() as sct:
+        with mss.MSS() as sct:
             monitor = sct.monitors[0]
             shot = sct.grab(monitor)
             mss.tools.to_png(shot.rgb, shot.size, output=str(output_path))

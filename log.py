@@ -198,6 +198,7 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--type", default="thought", help="Event type (thought/stdin/git/system/...)")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
     parser.add_argument("--timeout", type=float, default=0.8, help="POST /events timeout seconds")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     # parser.add_argument("--async", dest="async_mode", action="store_true", help="Process in background (all processing is async by default)")
     parser.add_argument("message", nargs="*", help="Event body. If omitted, GUI or stdin is used.")
     return parser.parse_args(argv[1:])
@@ -268,24 +269,39 @@ def print_warnings(payload: Any) -> None:
             print(f"  action: {action}", file=sys.stderr)
 
 
+def debug_log(args: argparse.Namespace, message: str) -> None:
+    if getattr(args, 'debug', False):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        print(f"[debug {timestamp}] {message}", file=sys.stderr)
+
+
 def post_event(args: argparse.Namespace) -> int:
     raw_text, source, clipboard = resolve_raw_input(args)
+    debug_log(args, f"input resolved: source={source}, text_len={len(raw_text)}")
     
     if not raw_text.strip():
         print("no message to send", file=sys.stderr)
         return 1
     
+    debug_log(args, f"message valid, starting background process")
+    
     def process_event() -> None:
+        debug_log(args, "process_event: collecting context")
         window_title = get_active_window_title()
         page_title = extract_page_title(window_title)
+        debug_log(args, f"window_title={window_title}")
+        
         shot_ok = False
         shot_path = "unknown"
         shot_error = ""
         if args.capture_shot:
             time.sleep(0.15)
+            debug_log(args, "process_event: capturing screenshot")
             shot_ok, shot_path, shot_error = capture_screenshot(
                 make_screenshot_path(Path(args.shot_dir).expanduser())
             )
+            debug_log(args, f"screenshot: ok={shot_ok}, path={shot_path}, error={shot_error}")
+        
         payload = {
             "type": args.type,
             "body": raw_text,
@@ -311,8 +327,10 @@ def post_event(args: argparse.Namespace) -> int:
             },
         }
         url = args.daemon_url.rstrip("/") + "/events"
+        debug_log(args, f"posting to {url}")
         try:
             response = requests.post(url, json=payload, timeout=args.timeout)
+            debug_log(args, f"response: status={response.status_code}")
             if response.status_code != 200:
                 print(f"daemon rejected event: HTTP {response.status_code} {response.text[:250]}", file=sys.stderr)
                 return
@@ -320,11 +338,14 @@ def post_event(args: argparse.Namespace) -> int:
                 print_warnings(response.json())
             except ValueError:
                 pass
+            debug_log(args, "event posted successfully")
         except requests.RequestException as exc:
+            debug_log(args, f"request failed: {exc}")
             print(f"failed to send event to daemon: {exc}", file=sys.stderr)
     
     thread = threading.Thread(target=process_event, daemon=False)
     thread.start()
+    debug_log(args, "waiting for thread to complete (max 2s)")
     thread.join(timeout=2.0)
     return 0
 

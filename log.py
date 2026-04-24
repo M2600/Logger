@@ -232,7 +232,9 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
 
 def resolve_raw_input(args: argparse.Namespace) -> tuple[str, str, str]:
     if args.message:
-        return " ".join(args.message), "cli", get_clipboard_text()
+        filtered = [arg for arg in args.message if arg.strip()]
+        if filtered:
+            return " ".join(filtered), "cli", get_clipboard_text()
     if args.stdin or not sys.stdin.isatty():
         return sys.stdin.read(), "stdin", get_clipboard_text()
     raw = ""
@@ -317,8 +319,9 @@ def post_event(args: argparse.Namespace) -> int:
         except requests.RequestException as exc:
             print(f"failed to send event to daemon: {exc}", file=sys.stderr)
     
-    thread = threading.Thread(target=process_event, daemon=True)
+    thread = threading.Thread(target=process_event, daemon=False)
     thread.start()
+    thread.join(timeout=2.0)
     return 0
 
 

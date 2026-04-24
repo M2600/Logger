@@ -245,8 +245,6 @@ def resolve_raw_input(args: argparse.Namespace) -> tuple[str, str, str]:
     except Exception:
         raw = ""
     clipboard = get_clipboard_text()
-    if not raw.strip() and clipboard.strip():
-        raw = clipboard
     return raw, "shortcut", clipboard
 
 

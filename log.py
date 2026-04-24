@@ -9,6 +9,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,6 +198,7 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--type", default="thought", help="Event type (thought/stdin/git/system/...)")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
     parser.add_argument("--timeout", type=float, default=0.8, help="POST /events timeout seconds")
+    # parser.add_argument("--async", dest="async_mode", action="store_true", help="Process in background (all processing is async by default)")
     parser.add_argument("message", nargs="*", help="Event body. If omitted, GUI or stdin is used.")
     return parser.parse_args(argv[1:])
 
@@ -266,53 +268,57 @@ def print_warnings(payload: Any) -> None:
 
 def post_event(args: argparse.Namespace) -> int:
     raw_text, source, clipboard = resolve_raw_input(args)
-    window_title = get_active_window_title()
-    page_title = extract_page_title(window_title)
-    shot_ok = False
-    shot_path = "unknown"
-    shot_error = ""
-    if args.capture_shot:
-        time.sleep(0.15)
-        shot_ok, shot_path, shot_error = capture_screenshot(
-            make_screenshot_path(Path(args.shot_dir).expanduser())
-        )
-    payload = {
-        "type": args.type,
-        "body": raw_text,
-        "source": source,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "context": {
-            "cwd": os.getcwd(),
-            "win": window_title or "unknown",
-            "host": socket.gethostname(),
-            "is_browser": is_browser_window(window_title),
-            "page_title": page_title,
-            "os": platform.system(),
-        },
-        "meta": {
-            "clipboard": clipboard[:500] if clipboard else "",
-            "project_hint": infer_project_hint(os.getcwd(), window_title),
-            "screenshot": {
-                "enabled": bool(args.capture_shot),
-                "ok": shot_ok,
-                "path": shot_path if args.capture_shot else "",
-                "error": shot_error,
+    
+    def process_event() -> None:
+        window_title = get_active_window_title()
+        page_title = extract_page_title(window_title)
+        shot_ok = False
+        shot_path = "unknown"
+        shot_error = ""
+        if args.capture_shot:
+            time.sleep(0.15)
+            shot_ok, shot_path, shot_error = capture_screenshot(
+                make_screenshot_path(Path(args.shot_dir).expanduser())
+            )
+        payload = {
+            "type": args.type,
+            "body": raw_text,
+            "source": source,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "context": {
+                "cwd": os.getcwd(),
+                "win": window_title or "unknown",
+                "host": socket.gethostname(),
+                "is_browser": is_browser_window(window_title),
+                "page_title": page_title,
+                "os": platform.system(),
             },
-        },
-    }
-    url = args.daemon_url.rstrip("/") + "/events"
-    try:
-        response = requests.post(url, json=payload, timeout=args.timeout)
-    except requests.RequestException as exc:
-        print(f"failed to send event to daemon: {exc}", file=sys.stderr)
-        return 1
-    if response.status_code != 200:
-        print(f"daemon rejected event: HTTP {response.status_code} {response.text[:250]}", file=sys.stderr)
-        return 1
-    try:
-        print_warnings(response.json())
-    except ValueError:
-        pass
+            "meta": {
+                "clipboard": clipboard[:500] if clipboard else "",
+                "project_hint": infer_project_hint(os.getcwd(), window_title),
+                "screenshot": {
+                    "enabled": bool(args.capture_shot),
+                    "ok": shot_ok,
+                    "path": shot_path if args.capture_shot else "",
+                    "error": shot_error,
+                },
+            },
+        }
+        url = args.daemon_url.rstrip("/") + "/events"
+        try:
+            response = requests.post(url, json=payload, timeout=args.timeout)
+            if response.status_code != 200:
+                print(f"daemon rejected event: HTTP {response.status_code} {response.text[:250]}", file=sys.stderr)
+                return
+            try:
+                print_warnings(response.json())
+            except ValueError:
+                pass
+        except requests.RequestException as exc:
+            print(f"failed to send event to daemon: {exc}", file=sys.stderr)
+    
+    thread = threading.Thread(target=process_event, daemon=True)
+    thread.start()
     return 0
 
 

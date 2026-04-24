@@ -67,21 +67,22 @@ LLM Worker (Ollama)
 
 ---
 
-### 2.1 CLI Client（`l` コマンド）
+### 2.1 CLI Client（`log.py`）
 
 **役割:** 入力受け付けとコンテキスト収集に特化した超軽量プログラム。
 
 | モード | 例 |
 |---|---|
-| 非対話モード | `l "fix docker bug"` |
-| 対話モード | `l`（簡易入力UI） |
-| stdinモード | `git diff \| l` / `pytest \| l` / `cat error.log \| l` |
+| 非対話モード | `python log.py "fix docker bug"` |
+| 対話モード | `python log.py`（簡易入力UI） |
+| stdinモード | `git diff \| python log.py --stdin` |
 
-stdinモードにより、開発ログ・システムログ・コマンドログをそのまま記録可能。
+stdinモードにより、開発ログ・システムログ・コマンドログをそのまま記録可能。  
+クライアントの責務は「入力・コンテキスト収集・API送信」に限定する。
 
 ---
 
-### 2.2 Daemon / APIサーバー（FastAPI）
+### 2.2 Daemon / APIサーバー（FastAPI, `daemon.py`）
 
 **役割:** バックグラウンド常駐。データの確実な保存と重い処理のスケジューリングを担うハブ。
 
@@ -98,6 +99,15 @@ analysis_job を非同期キューへ積む
 ↓
 自身のペースでLLMワーカーへ渡す
 ```
+
+公開API（現行）:
+
+- `GET /health`
+- `GET /settings`
+- `POST /settings/ai`
+- `POST /events`
+- `POST /analyze/backfill`
+- `POST /reports/generate`
 
 ---
 
@@ -178,7 +188,7 @@ commit
 ↓
 commit hash / branch / message 取得
 ↓
-l コマンドへ自動送信
+python log.py --type git へ自動送信
 ```
 
 これにより **「思考 → コード → commit」の因果関係** がログとして保存される。
@@ -207,22 +217,22 @@ analysis_runs.jsonl
 
 インプット側と同様、アウトプットも **CLIで完結** させる。
 
-### `l report` — 日報・報告用
+### `python log.py report` — 日報・報告用
 
 - **対象:** 他者向け（上司・チーム等）
 - **内容:** 完了した事実を時系列でまとめたMarkdown
 - **フォーマット:** プロジェクトごとに整理された綺麗なレポート
 
-### `l next` — 自分向け確認用
+### `python log.py next` — 自分向け確認用
 
 - **対象:** 自分自身
 - **内容:** 未完了タスク・疑問点・やり残しのチェックリスト
 - **フォーマット:** チェックボックス形式のTODOリスト
 
-**実装方針（検討中）:**
-- 同じログデータを使いつつ、**プロンプトを用途別に分ける**
-- `report用プロンプト` と `next用プロンプト` をワーカー側で管理
-- または、ログの分類・構造化までワーカーが担当し、**出力フォーマットはクライアント側でリクエスト時に指定**
+**現行実装:**
+- クライアントは `/reports/generate` を呼び、返却結果を表示する
+- レポート生成ロジック（静的集計 + 必要時のLLM整形）はデーモン側に集約
+- 出力フォーマット（md/json/both）はクライアント側で指定
 
 ---
 
@@ -232,6 +242,8 @@ analysis_runs.jsonl
 
 - 重いゲームや別開発中 → AI処理を停止、ログはJSONLに蓄積
 - 後から一気にバッチ処理
+- 再起動時は未分類イベントを自動再キューして処理を再開
+- `/health` などで warning を返し、モデル未取得や分類停滞を可視化
 
 ---
 
@@ -250,7 +262,7 @@ analysis_runs.jsonl
 
 | Phase | 内容 |
 |---|---|
-| Phase 1（MVP） | CLI + Daemon + JSONL + LLM Worker |
+| Phase 1（MVP, 実装済み） | `log.py` + `daemon.py` + JSONL Event Store + 非同期LLM Worker |
 | Phase 2 | 音声入力（Whisper統合）。スマホからのボイスメモを同じ思考ストリームへ |
 | Phase 3 | 分散構成。ログ収集はRaspberry Pi、LLM推論はGPUマシン |
 | Phase 4 | Vector DB導入による意味検索強化 |

@@ -181,13 +181,15 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
             "subcommands:\n"
             "  report   request progress report from daemon\n"
             "  next     request todo list from daemon\n"
-            "  settings update daemon AI setting\n\n"
+            "  settings update daemon AI setting\n"
+            "  status   check daemon health and state\n\n"
             "examples:\n"
             "  python log.py \"fix docker bug\"\n"
             "  python log.py --gui\n"
             "  python log.py report --period today --format md\n"
             "  python log.py next --llm never --format json\n"
-            "  python log.py settings --ai on"
+            "  python log.py settings --ai on\n"
+            "  python log.py status"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -230,6 +232,14 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
     parser.add_argument("--timeout", type=float, default=10.0, help="POST /settings/ai timeout seconds")
     parser.add_argument("--ai", choices=["on", "off"], required=True, help="Enable/disable daemon AI worker")
+    return parser.parse_args(argv[2:])
+
+
+def parse_status_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Core-Stream status: check daemon health and state")
+    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--timeout", type=float, default=5.0, help="GET /health timeout seconds")
+    parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     return parser.parse_args(argv[2:])
 
 
@@ -439,6 +449,57 @@ def update_settings(args: argparse.Namespace) -> int:
     return 0
 
 
+def check_status(args: argparse.Namespace) -> int:
+    url = args.daemon_url.rstrip("/") + "/health"
+    try:
+        response = requests.get(url, timeout=args.timeout)
+    except requests.RequestException as exc:
+        print(f"failed to check status: {exc}", file=sys.stderr)
+        return 1
+    if response.status_code != 200:
+        print(f"daemon error: HTTP {response.status_code}", file=sys.stderr)
+        return 1
+    
+    data = response.json()
+    
+    if args.format == "json":
+        sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+        return 0
+    
+    # Text format
+    status = data.get("status", "unknown")
+    ai_enabled = data.get("ai_enabled", False)
+    queue_size = data.get("queue_size", 0)
+    
+    print(f"Status: {status}")
+    print(f"AI enabled: {'yes' if ai_enabled else 'no'}")
+    print(f"Queue size: {queue_size}")
+    
+    # Analysis state
+    analysis_state = data.get("analysis_state", {})
+    if analysis_state:
+        print("\nAnalysis State:")
+        print(f"  Pending: {analysis_state.get('pending_events', 0)}")
+        print(f"  Processing: {analysis_state.get('processing_events', 0)}")
+        print(f"  In-flight: {analysis_state.get('inflight_events', 0)}")
+        print(f"  Done: {analysis_state.get('done_events', 0)}")
+        print(f"  Failed: {analysis_state.get('failed_events', 0)}")
+        print(f"  Unclassified: {analysis_state.get('unclassified_events', 0)}")
+        print(f"  Resumed on startup: {analysis_state.get('resumed_on_startup', 0)}")
+    
+    # Last analysis error
+    last_error = data.get("last_analysis_error")
+    if last_error:
+        print("\nLast Analysis Error:")
+        print(f"  Event: {last_error.get('event_id', 'unknown')[:8]}")
+        print(f"  Error: {last_error.get('error', 'unknown')[:100]}")
+    
+    # Warnings
+    print_warnings(data)
+    
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) > 1 and argv[1] == "report":
         return generate_report(parse_report_args(argv, mode="report"))
@@ -446,6 +507,8 @@ def main(argv: list[str]) -> int:
         return generate_report(parse_report_args(argv, mode="todo"))
     if len(argv) > 1 and argv[1] == "settings":
         return update_settings(parse_settings_args(argv))
+    if len(argv) > 1 and argv[1] == "status":
+        return check_status(parse_status_args(argv))
     return post_event(parse_log_args(argv))
 
 

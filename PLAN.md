@@ -151,6 +151,13 @@ HTTP POST /events（デーモンへ送信）
   - 失敗・再試行時は古い分類結果は削除
   - 起動時と backfill 時に jobs から再構築
 
+**自動リトライ機構:**
+- LLM 分析失敗時、エラーが一時的（timeout/connection など）なら自動再キュー
+- `is_retriable_error()` で エラーの種別を判定
+- 指数バックオフで再試行: 5秒 → 10秒 → 20秒（最大3回）
+- `retry_queue` と `retry_manager` スレッドで管理
+- 永続的エラー（model not found など）は手動 backfill のみ
+
 処理フロー:
 
 ```
@@ -163,6 +170,9 @@ JSONL へ即時追記
 analysis_job を非同期キューへ積む
 ↓
 自身のペースでLLMワーカーへ渡す
+↓
+失敗時 → is_retriable なら retry_queue へ
+       → 指数バックオフで再処理
 ```
 
 公開API（現行）:
@@ -269,6 +279,11 @@ python log.py --type git へ自動送信
 | summarization | 指定期間の要約生成 |
 | thought linking | 思考とcommitとbugfixの関連付け |
 
+**プロンプト最適化:**
+- GUI 入力（`source="gui"`）の場合、ウィンドウ/ページタイトル優先の指示を追加
+- CLI 入力の場合は cwd ベースの分類
+- これにより、複数プロジェクト作業時に入力元に応じた正確な分類が可能
+
 **再分析設計:** LLM分析は1回で終わらない。新モデルやプロンプト改善に対応するため、`analysis_runs.jsonl` で分析履歴を管理する。
 
 ```
@@ -278,7 +293,20 @@ analysis_runs.jsonl
 
 ---
 
-## 6. アウトプット設計（CLIオプション）
+## 6. タイムスタンプ管理
+
+すべてのタイムスタンプはローカルタイムゾーン（JST +09:00 等）で記録される。
+
+- **イベント作成時刻** (`event.created_at`): ローカル時刻 ISO 8601 形式
+- **分類時刻** (`classified.classified_at`): ローカル時刻
+- **ジョブ記録時刻** (`jobs.created_at`): ローカル時刻
+- **レポートファイル名**: `20260425T101718+0900_report.md` 形式
+
+→ ユーザーのシステム設定に自動追従。UTC 固定ではない。
+
+---
+
+## 7. アウトプット設計（CLIオプション）
 
 インプット側と同様、アウトプットも **CLIで完結** させる。
 
@@ -301,7 +329,7 @@ analysis_runs.jsonl
 
 ---
 
-## 7. AI処理のオン/オフ制御
+## 8. AI処理のオン/オフ制御
 
 デーモン側に設定APIを持たせ、AI処理を一時停止できる。
 
@@ -312,7 +340,7 @@ analysis_runs.jsonl
 
 ---
 
-## 8. 検索機能
+## 9. 検索機能
 
 推奨構成: **Hybrid Search**
 
@@ -323,7 +351,7 @@ analysis_runs.jsonl
 
 ---
 
-## 9. 拡張ロードマップ
+## 10. 拡張ロードマップ
 
 | Phase | 内容 |
 |---|---|
@@ -335,12 +363,38 @@ analysis_runs.jsonl
 
 ---
 
-## 10. このプロジェクトの位置づけ
+## 11. このプロジェクトの位置づけ
 
 | 比較対象 | 違い |
 |---|---|
 | Roam Research / Logseq | あちらは「手動ナレッジ管理」。Core-Streamは「自動思考ストリーム記録」 |
 | Apache Kafka | 思想的に近い。ただし対象は人間の思考 |
+
+---
+
+## 12. 実装完了機能（Phase 1）
+
+**Client (`log.py`):**
+- ✅ CLI / GUI / stdin 入力モード
+- ✅ 空引数フィルタリングと検証
+- ✅ バックグラウンドスレッド送信（thread.join で完了待機）
+- ✅ debug ログ出力
+- ✅ サブコマンド: status / report / backfill / next / settings
+- ✅ ローカルタイムゾーン対応
+
+**Daemon (`daemon.py`):**
+- ✅ イベント受信・永続化 API
+- ✅ 非同期 LLM 分析ワーカー
+- ✅ classified.jsonl の整合性管理（失敗時の古い結果削除）
+- ✅ 自動リトライ機構（指数バックオフ）
+- ✅ /health エンドポイント（状態・warnings 表示）
+- ✅ /analyze/backfill エンドポイント（手動再処理）
+- ✅ /reports/generate エンドポイント（レポート生成）
+
+**LLM 分類:**
+- ✅ GUI 入力時のウィンドウ優先プロンプト
+- ✅ エラーの一時的/永続的判定
+- ✅ 指数バックオフ再試行（最大3回）
 
 ---
 

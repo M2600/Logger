@@ -395,6 +395,78 @@ analysis_runs.jsonl
 - ✅ GUI 入力時のウィンドウ優先プロンプト
 - ✅ エラーの一時的/永続的判定
 - ✅ 指数バックオフ再試行（最大3回）
+- ✅ オプションのAPI キー認証（Bearer token）
+
+---
+
+## 13. API Key 認証（Network Deployment）
+
+### 設計
+- **デフォルト:** 認証なし（ローカル実行時は変更不要）
+- **オプション:** daemon 起動時に `--api-key "secret"` で有効化
+- **方式:** `Authorization: Bearer <key>` HTTP ヘッダー
+- **対象:** すべてのエンドポイント（`GET /` と `GET /health` 除外）
+
+### 実装
+**Daemon（`daemon.py`）:**
+- `AuthConfig` dataclass で API キー管理
+- FastAPI middleware で Bearer token 検証
+- 公開エンドポイントはスキップ（/、/health）
+- 401: Authorization ヘッダー不足
+- 403: 不正な API キー
+- `/health` レスポンスに `auth_enabled` フィールド追加
+
+**Client（`log.py`）:**
+- `--api-key` CLI 引数
+- `--config-file` で JSON 設定ファイル読み込み
+- `LOGGER_API_KEY` 環境変数対応
+- 優先度: CLI arg > config file > env var
+- すべてのリクエストに Bearer token 自動追加
+
+**Web UI（`index.html`）:**
+- API キー入力フィールド（パスワード形式）
+- 認証なしでも機能（オプション）
+- fetch リクエストに Authorization ヘッダー自動追加
+
+### 設定ファイル例
+```json
+{
+  "api_key": "your-secret-key-here",
+  "port": 8765
+}
+```
+
+### 使用例
+```bash
+# Daemon をローカル実行（認証なし、従来通り）
+python daemon.py
+
+# Daemon をリモート公開（認証あり）
+python daemon.py --api-key "my-secret-key"
+
+# または config ファイル
+python daemon.py --config-file ~/.logger/daemon.json
+
+# Client で認証
+python log.py --api-key "my-secret-key" "Hello from remote"
+
+# または環境変数
+export LOGGER_API_KEY="my-secret-key"
+python log.py "Hello from remote"
+```
+
+---
+
+## 14. 実装完了機能（Phase 1 + Auth）
+
+**認証:**
+- ✅ Daemon: Bearer token validation middleware
+- ✅ Daemon: CLI 引数 (--api-key, --config-file)
+- ✅ Daemon: /health endpoint auth_enabled field
+- ✅ Client: API key loading (CLI arg, config, env var)
+- ✅ Client: Bearer token header injection
+- ✅ Web UI: Optional API key input field
+- ✅ Backward compatible (auth disabled by default)
 
 ---
 
@@ -406,7 +478,9 @@ Thought Logger
 Event Stream
 +
 AI Structuring
++
+Secure Network Deployment (optional API key)
 ```
 
-**入力はfrictionless、整理はAI自動化。**
+**入力はfrictionless、整理はAI自動化、展開は安全。**
 思考を止めない、ただそれだけのために設計されたシステム。

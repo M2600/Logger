@@ -587,6 +587,14 @@ python daemon.py --config-file ~/.logger/daemon.json --port 9000 --model llama2 
 - ✅ Client: thread.join(timeout=30) で送信完了待機
 - ✅ Event meta に screenshot_path を記録
 
+**デュアルモード処理（Fire-and-Forget + Default）:**
+- ✅ `--fire-and-forget` フラグで即座にシェル解放（0.14秒）
+- ✅ バックグラウンド subprocess で独立実行
+- ✅ `~/.logger/pending_events.jsonl` で送信内容を永続化
+- ✅ `~/.logger/last_event.log` で実行結果を記録
+- ✅ `python log.py retry-send` で未送信イベントを再送信
+- ✅ デフォルトモード（`python log.py "msg"`）で結果を待って表示（互換性維持）
+
 ---
 
 ## まとめ

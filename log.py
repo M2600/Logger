@@ -26,6 +26,9 @@ except Exception:
 
 DEFAULT_SHOT_DIR = Path.home() / "thought_stream_shots"
 DEFAULT_DAEMON_URL = os.environ.get("CORE_STREAM_DAEMON_URL", "http://127.0.0.1:8765")
+LOGGER_DIR = Path.home() / ".logger"
+PENDING_EVENTS_FILE = LOGGER_DIR / "pending_events.jsonl"
+LAST_EVENT_LOG_FILE = LOGGER_DIR / "last_event.log"
 BROWSER_SUFFIXES = [
     "Google Chrome",
     "Chrome",
@@ -266,6 +269,7 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--timeout", type=float, default=None, help="POST /events timeout seconds")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--fire-and-forget", action="store_true", help="Release shell immediately, save results to ~/.logger/last_event.log")
     # parser.add_argument("--async", dest="async_mode", action="store_true", help="Process in background (all processing is async by default)")
     parser.add_argument("message", nargs="*", help="Event body. If omitted, GUI or stdin is used.")
     
@@ -482,6 +486,45 @@ def debug_log(args: argparse.Namespace, message: str) -> None:
         print(f"[debug {timestamp}] {message}", file=sys.stderr)
 
 
+def ensure_logger_dir() -> None:
+    """Ensure ~/.logger directory exists"""
+    LOGGER_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_to_pending_events(payload: dict) -> None:
+    """Save event payload to pending_events.jsonl for later retry"""
+    ensure_logger_dir()
+    with open(PENDING_EVENTS_FILE, 'a') as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+
+
+def remove_from_pending_events(event_id: str) -> None:
+    """Remove successfully sent event from pending_events.jsonl"""
+    if not PENDING_EVENTS_FILE.exists():
+        return
+    
+    pending = []
+    with open(PENDING_EVENTS_FILE, 'r') as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+                if event.get('id') != event_id:
+                    pending.append(event)
+            except json.JSONDecodeError:
+                pass
+    
+    with open(PENDING_EVENTS_FILE, 'w') as f:
+        for event in pending:
+            f.write(json.dumps(event, ensure_ascii=False) + '\n')
+
+
+def save_last_event_log(result: dict) -> None:
+    """Save last event execution result to log file"""
+    ensure_logger_dir()
+    with open(LAST_EVENT_LOG_FILE, 'w') as f:
+        f.write(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+
+
 def post_event(args: argparse.Namespace) -> int:
     raw_text, source, clipboard = resolve_raw_input(args)
     debug_log(args, f"input resolved: source={source}, text_len={len(raw_text)}")
@@ -492,70 +535,155 @@ def post_event(args: argparse.Namespace) -> int:
     
     debug_log(args, f"message valid, starting background process")
     
-    def process_event() -> None:
-        debug_log(args, "process_event: collecting context")
-        window_title = get_active_window_title()
-        page_title = extract_page_title(window_title)
-        debug_log(args, f"window_title={window_title}")
-        
-        screenshot_data = ""
-        shot_error = ""
-        if args.capture_shot:
-            time.sleep(0.15)
-            debug_log(args, "process_event: capturing screenshot")
-            shot_ok, screenshot_data, shot_error = capture_screenshot_base64()
-            debug_log(args, f"screenshot: ok={shot_ok}, error={shot_error}")
-        
-        payload = {
-            "type": args.type,
-            "body": raw_text,
-            "source": source,
-            "created_at": datetime.now().astimezone().isoformat(),
-            "context": {
-                "cwd": os.getcwd(),
-                "win": window_title or "unknown",
-                "host": socket.gethostname(),
-                "is_browser": is_browser_window(window_title),
-                "page_title": page_title,
-                "os": platform.system(),
-            },
-            "meta": {
-                "clipboard": clipboard[:500] if clipboard else "",
-                "project_hint": infer_project_hint(os.getcwd(), window_title),
-                "screenshot": {
-                    "enabled": bool(args.capture_shot),
-                    "ok": bool(screenshot_data),
-                    "error": shot_error,
-                },
-            },
-        }
-        
-        # Include screenshot data if captured
-        if screenshot_data:
-            payload["screenshot_data"] = screenshot_data
-        
-        url = args.daemon_url.rstrip("/") + "/events"
-        debug_log(args, f"posting to {url}")
-        try:
-            response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
-            debug_log(args, f"response: status={response.status_code}")
-            if response.status_code != 200:
-                print(f"daemon rejected event: HTTP {response.status_code} {response.text[:250]}", file=sys.stderr)
-                return
-            try:
-                print_warnings(response.json())
-            except ValueError:
-                pass
-            debug_log(args, "event posted successfully")
-        except requests.RequestException as exc:
-            debug_log(args, f"request failed: {exc}")
-            print(f"failed to send event to daemon: {exc}", file=sys.stderr)
+    fire_and_forget = getattr(args, 'fire_and_forget', False)
     
-    thread = threading.Thread(target=process_event, daemon=True)
+    def process_event() -> None:
+        start_time = time.time()
+        warnings_list = []
+        errors_list = []
+        event_id = None
+        
+        try:
+            debug_log(args, "process_event: collecting context")
+            window_title = get_active_window_title()
+            page_title = extract_page_title(window_title)
+            debug_log(args, f"window_title={window_title}")
+            
+            screenshot_data = ""
+            shot_error = ""
+            if args.capture_shot:
+                time.sleep(0.15)
+                debug_log(args, "process_event: capturing screenshot")
+                shot_ok, screenshot_data, shot_error = capture_screenshot_base64()
+                debug_log(args, f"screenshot: ok={shot_ok}, error={shot_error}")
+            
+            import uuid
+            event_id = f"evt_{uuid.uuid4().hex[:12]}"
+            
+            payload = {
+                "id": event_id,
+                "type": args.type,
+                "body": raw_text,
+                "source": source,
+                "created_at": datetime.now().astimezone().isoformat(),
+                "context": {
+                    "cwd": os.getcwd(),
+                    "win": window_title or "unknown",
+                    "host": socket.gethostname(),
+                    "is_browser": is_browser_window(window_title),
+                    "page_title": page_title,
+                    "os": platform.system(),
+                },
+                "meta": {
+                    "clipboard": clipboard[:500] if clipboard else "",
+                    "project_hint": infer_project_hint(os.getcwd(), window_title),
+                    "screenshot": {
+                        "enabled": bool(args.capture_shot),
+                        "ok": bool(screenshot_data),
+                        "error": shot_error,
+                    },
+                },
+            }
+            
+            # Include screenshot data if captured
+            if screenshot_data:
+                payload["screenshot_data"] = screenshot_data
+            
+            # fire-and-forget: save to pending before sending
+            if fire_and_forget:
+                debug_log(args, f"fire-and-forget: saving to pending (event_id={event_id})")
+                save_to_pending_events(payload)
+            
+            url = args.daemon_url.rstrip("/") + "/events"
+            debug_log(args, f"posting to {url}")
+            
+            try:
+                # Use longer timeout for background thread (large image uploads may need time)
+                # User shell is already released, so we can afford to wait
+                background_timeout = max(args.timeout * 10, 30.0)
+                response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=background_timeout)
+                debug_log(args, f"response: status={response.status_code}")
+                
+                if response.status_code == 200:
+                    try:
+                        resp_data = response.json()
+                        if not fire_and_forget:
+                            # Default mode: print warnings to stderr
+                            print_warnings(resp_data)
+                        else:
+                            # Fire-and-forget: collect warnings for logging
+                            if "warnings" in resp_data:
+                                for w in resp_data["warnings"]:
+                                    if isinstance(w, dict):
+                                        warnings_list.append(w.get("message", str(w)))
+                    except ValueError:
+                        pass
+                    debug_log(args, "event posted successfully")
+                    
+                    # Remove from pending if send succeeded
+                    if fire_and_forget:
+                        debug_log(args, f"fire-and-forget: removing from pending (event_id={event_id})")
+                        remove_from_pending_events(event_id)
+                    
+                    status = "success"
+                else:
+                    error_msg = f"HTTP {response.status_code}"
+                    errors_list.append(error_msg)
+                    if not fire_and_forget:
+                        print(f"daemon rejected event: {error_msg} {response.text[:250]}", file=sys.stderr)
+                    debug_log(args, f"daemon rejected: {error_msg}")
+                    status = "error"
+                    
+            except requests.Timeout as exc:
+                error_msg = f"timeout: {exc}"
+                errors_list.append(error_msg)
+                if not fire_and_forget:
+                    print(f"failed to send event to daemon: {error_msg}", file=sys.stderr)
+                debug_log(args, f"request timeout: {exc}")
+                status = "timeout"
+            except requests.RequestException as exc:
+                error_msg = str(exc)
+                errors_list.append(error_msg)
+                if not fire_and_forget:
+                    print(f"failed to send event to daemon: {error_msg}", file=sys.stderr)
+                debug_log(args, f"request failed: {exc}")
+                status = "error"
+            
+        except Exception as exc:
+            error_msg = str(exc)
+            errors_list.append(error_msg)
+            if not fire_and_forget:
+                print(f"error processing event: {error_msg}", file=sys.stderr)
+            debug_log(args, f"unexpected error: {exc}")
+            status = "error"
+        
+        finally:
+            # Save result log if fire-and-forget mode
+            if fire_and_forget:
+                duration_ms = int((time.time() - start_time) * 1000)
+                result = {
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "status": locals().get('status', 'error'),
+                    "event_id": event_id or "unknown",
+                    "warnings": warnings_list,
+                    "errors": errors_list,
+                    "duration_ms": duration_ms
+                }
+                save_last_event_log(result)
+                debug_log(args, f"fire-and-forget: result saved to {LAST_EVENT_LOG_FILE}")
+    
+    # Always use non-daemon thread to allow completion
+    thread = threading.Thread(target=process_event, daemon=False)
     thread.start()
-    debug_log(args, "thread started, returning control to user immediately")
-    # Wait for thread to complete before exiting (with timeout)
-    thread.join(timeout=30)
+    
+    if not fire_and_forget:
+        # Default mode: wait for thread to complete
+        debug_log(args, "waiting for thread to complete (max 30s)")
+        thread.join(timeout=30)
+    else:
+        # Fire-and-forget mode: release shell immediately without waiting
+        debug_log(args, "fire-and-forget mode: shell released immediately")
+    
     return 0
 
 
@@ -714,7 +842,99 @@ def run_backfill(args: argparse.Namespace) -> int:
 
 
 
+def run_retry_send(args: argparse.Namespace) -> int:
+    """Retry sending all pending events"""
+    if not PENDING_EVENTS_FILE.exists():
+        print("No pending events to retry", file=sys.stderr)
+        return 0
+    
+    pending_events = []
+    with open(PENDING_EVENTS_FILE, 'r') as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+                pending_events.append(event)
+            except json.JSONDecodeError:
+                pass
+    
+    if not pending_events:
+        print("No pending events to retry", file=sys.stderr)
+        return 0
+    
+    print(f"Retrying {len(pending_events)} pending events...", file=sys.stderr)
+    
+    success_count = 0
+    failure_count = 0
+    
+    for payload in pending_events:
+        event_id = payload.get('id', 'unknown')
+        url = args.daemon_url.rstrip("/") + "/events"
+        
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=get_request_headers(args),
+                timeout=max(args.timeout * 10, 30.0)
+            )
+            
+            if response.status_code == 200:
+                print(f"✓ {event_id}: sent successfully", file=sys.stderr)
+                remove_from_pending_events(event_id)
+                success_count += 1
+            else:
+                print(f"✗ {event_id}: HTTP {response.status_code}", file=sys.stderr)
+                failure_count += 1
+        except requests.RequestException as exc:
+            print(f"✗ {event_id}: {exc}", file=sys.stderr)
+            failure_count += 1
+    
+    print(f"\nRetry complete: {success_count} sent, {failure_count} failed", file=sys.stderr)
+    return 0 if failure_count == 0 else 1
+
+
+def parse_retry_send_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Core-Stream retry-send: resend pending events")
+    parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--timeout", type=float, default=None, help="POST timeout seconds")
+    
+    args = parser.parse_args(argv[2:])
+    
+    # Priority: CLI arg > config file > default
+    if args.config_file:
+        config_data = load_client_config(args.config_file)
+    else:
+        config_file, config_data = _get_client_config_or_default()
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 30.0)
+    
+    return args
+
+
 def main(argv: list[str]) -> int:
+    # Handle fire-and-forget mode: spawn as background subprocess for instant shell release
+    if "--fire-and-forget" in argv:
+        # Check if this is already a subprocess (to avoid infinite recursion)
+        if os.environ.get("_LOGGER_FFG_SUBPROCESS") != "1":
+            # Spawn as background subprocess
+            env = os.environ.copy()
+            env["_LOGGER_FFG_SUBPROCESS"] = "1"
+            subprocess.Popen(
+                [sys.executable] + argv,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+            )
+            return 0
+    
     if len(argv) > 1 and argv[1] == "report":
         return generate_report(parse_report_args(argv, mode="report"))
     if len(argv) > 1 and argv[1] == "next":
@@ -725,6 +945,8 @@ def main(argv: list[str]) -> int:
         return check_status(parse_status_args(argv))
     if len(argv) > 1 and argv[1] == "backfill":
         return run_backfill(parse_backfill_args(argv))
+    if len(argv) > 1 and argv[1] == "retry-send":
+        return run_retry_send(parse_retry_send_args(argv))
     return post_event(parse_log_args(argv))
 
 

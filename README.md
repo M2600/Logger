@@ -71,6 +71,32 @@ python log.py --no-shot "no screenshot"
 
 スクリーンショットはすべてdaemon側の `~/.logger/screenshots/` に保存されます。
 
+### Fire-and-Forget Mode (即座にシェル解放)
+
+通常モードはイベント送信完了を待ちますが、`--fire-and-forget` フラグで即座にシェルを解放し、バックグラウンドで処理を続行します：
+
+```bash
+# 0.14秒でシェルプロンプト返却、処理はバックグラウンド実行
+python log.py --fire-and-forget "quick message"
+
+# 結果は ~/.logger/last_event.log に自動記録
+cat ~/.logger/last_event.log
+```
+
+**利点:**
+- タイピング中断なし（シェル即解放）
+- 大きなリクエスト（画像など）も確実に送信（最大30秒タイムアウト）
+- ネットワーク失敗時も `~/.logger/pending_events.jsonl` に保存
+
+### Pending Events & Retry
+
+送信失敗時は `~/.logger/pending_events.jsonl` に保存され、後で再送信できます：
+
+```bash
+# 未送信イベントをすべて再送信
+python log.py retry-send
+```
+
 ## 3. Generate outputs
 
 ```bash

@@ -460,7 +460,15 @@ python log.py "Hello from remote"
 ## 14. 拡張設定ファイル対応（All Options）
 
 ### 概要
-すべてのコマンドラインオプションを設定ファイルで指定可能にし、CLI 引数での上書きに対応。
+すべてのコマンドラインオプションを設定ファイルで指定可能にし、正確な優先順位で処理される。
+
+### 優先順位（重要）
+**CLI 引数 > 設定ファイル > デフォルト値**
+
+実装方法：
+- argparse のデフォルト値を `None` に設定
+- parse_args() で解析後、`None` 値のみ config/default から取得
+- CLI 引数が明示的に指定されていれば、値は `None` 以外となり優先される
 
 ### Daemon 設定ファイル (`daemon.config.example.json`)
 ```json
@@ -479,10 +487,7 @@ python log.py "Hello from remote"
 }
 ```
 
-**設定順序:**
-1. 設定ファイルを読み込んで初期値として使用
-2. CLI 引数で指定された値で上書き
-3. 最終的に使用される値を確定
+**対応オプション:** host, port, events_path, classified_path, jobs_path, reports_dir, model, ollama_url, timeout, ai_enabled, api_key (11項目)
 
 ### Client 設定ファイル (`client.config.example.json`)
 ```json
@@ -498,34 +503,50 @@ python log.py "Hello from remote"
 }
 ```
 
+**対応オプション:** daemon_url, api_key, timeout (すべてのコマンド共通)、各コマンド固有のオプション
+
 ### 実装状況
 **Daemon (`daemon.py`):**
-- ✅ `_load_daemon_config()` で JSON 解析
-- ✅ `parse_args()` で config file → CLI override 順序を実装
-- ✅ 11 オプション対応: host, port, events_path, classified_path, jobs_path, reports_dir, model, ollama_url, timeout, ai_enabled, api_key
+- ✅ argparse デフォルト値を `None` に設定
+- ✅ parse_args() で `None` 値のみ config/default から取得
+- ✅ 優先順位: CLI > config > default で正確に実装
+- ✅ 11 オプション完全対応
 
 **Client (`log.py`):**
-- ✅ `load_client_config()` で JSON 解析
-- ✅ `parse_log_args()` で 8 オプション対応
-- ✅ `parse_report_args()` で 3 オプション対応
-- ✅ `parse_settings_args()` で 3 オプション対応
-- ✅ `parse_status_args()` で 3 オプション対応
-- ✅ `parse_backfill_args()` で 3 オプション対応
+- ✅ すべての parse_*_args() 関数で統一された実装
+- ✅ argparse デフォルト値を `None` に設定
+- ✅ 優先順位が正確に機能
+- ✅ parse_log_args (8オプション)
+- ✅ parse_report_args (3オプション)
+- ✅ parse_settings_args (3オプション)
+- ✅ parse_status_args (3オプション)
+- ✅ parse_backfill_args (3オプション)
 
 ### 使用例
 ```bash
 # 設定ファイルからのみ読み込み
 python daemon.py --config-file ~/.logger/daemon.json
 
-# CLI 引数で port を上書き
+# CLI 引数で port を上書き（明示的に指定）
 python daemon.py --config-file ~/.logger/daemon.json --port 9000
+# → port=9000 (CLI優先), 他はconfigから
 
 # Client で設定ファイル使用
 python log.py --config-file ~/.logger/client.json "test message"
 
-# CLI 引数で API キーを上書き
+# CLI 引数で API キーを上書き（明示的に指定）
 python log.py --config-file ~/.logger/client.json --api-key "new-key" "test"
+# → api_key=new-key (CLI優先), 他はconfigから
+
+# 複数の上書き
+python daemon.py --config-file ~/.logger/daemon.json --port 9000 --model llama2 --ai-enabled
 ```
+
+### テスト結果
+- ✅ デフォルト値が正しく使用される
+- ✅ 設定ファイルが正しく適用される
+- ✅ CLI 引数が設定ファイルを上書きする
+- ✅ 複数値が同時に指定された場合、混合で正しく機能
 
 ---
 

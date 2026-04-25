@@ -526,57 +526,66 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--config-file", type=str, default=None, help="Load all settings from JSON config file (CLI args override)")
-    parser.add_argument("--host", default="127.0.0.1", help="Bind address")
-    parser.add_argument("--port", type=int, default=8765, help="Bind port")
-    parser.add_argument("--events-path", default=str(DEFAULT_EVENT_PATH), help="JSONL event store path")
+    parser.add_argument("--host", default=None, help="Bind address")
+    parser.add_argument("--port", type=int, default=None, help="Bind port")
+    parser.add_argument("--events-path", default=None, help="JSONL event store path")
     parser.add_argument(
         "--classified-path",
-        default=str(DEFAULT_CLASSIFIED_PATH),
+        default=None,
         help="JSONL classified cache path",
     )
-    parser.add_argument("--jobs-path", default=str(DEFAULT_JOBS_PATH), help="JSONL analysis jobs path")
-    parser.add_argument("--reports-dir", default=str(DEFAULT_REPORT_DIR), help="Report output directory")
-    parser.add_argument("--model", default="gemma2", help="Ollama model for classification/refine")
-    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Ollama /api/generate URL")
-    parser.add_argument("--timeout", type=float, default=120.0, help="Ollama HTTP timeout seconds")
-    parser.add_argument("--ai-enabled", action="store_true", default=True, help="Enable AI worker (default)")
+    parser.add_argument("--jobs-path", default=None, help="JSONL analysis jobs path")
+    parser.add_argument("--reports-dir", default=None, help="Report output directory")
+    parser.add_argument("--model", default=None, help="Ollama model for classification/refine")
+    parser.add_argument("--ollama-url", default=None, help="Ollama /api/generate URL")
+    parser.add_argument("--timeout", type=float, default=None, help="Ollama HTTP timeout seconds")
+    parser.add_argument("--ai-enabled", action="store_true", default=None, help="Enable AI worker (default)")
     parser.add_argument("--ai-disabled", dest="ai_enabled", action="store_false", help="Disable AI worker")
     parser.add_argument("--api-key", type=str, default=None, help="Enable API key authentication (Bearer token)")
     
     args = parser.parse_args(argv[1:])
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
-        config_args = _load_daemon_config(args.config_file)
-        # Override only if CLI arg is default (not explicitly set)
-        for key, value in config_args.items():
-            if key not in ('config_file',) and value is not None:
-                setattr(args, key, value)
+        config_data = _load_daemon_config(args.config_file)
+    
+    # Apply defaults in reverse priority order
+    if args.host is None:
+        args.host = config_data.get('host', '127.0.0.1')
+    if args.port is None:
+        args.port = config_data.get('port', 8765)
+    if args.events_path is None:
+        args.events_path = config_data.get('events_path', str(DEFAULT_EVENT_PATH))
+    if args.classified_path is None:
+        args.classified_path = config_data.get('classified_path', str(DEFAULT_CLASSIFIED_PATH))
+    if args.jobs_path is None:
+        args.jobs_path = config_data.get('jobs_path', str(DEFAULT_JOBS_PATH))
+    if args.reports_dir is None:
+        args.reports_dir = config_data.get('reports_dir', str(DEFAULT_REPORT_DIR))
+    if args.model is None:
+        args.model = config_data.get('model', 'gemma2')
+    if args.ollama_url is None:
+        args.ollama_url = config_data.get('ollama_url', DEFAULT_OLLAMA_URL)
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 120.0)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    
+    # Handle ai_enabled specially since it uses action="store_true" with default=None
+    if args.ai_enabled is None:
+        args.ai_enabled = config_data.get('ai_enabled', True)
     
     return args
 
 
 def _load_daemon_config(config_path: str) -> dict[str, Any]:
-    """Load daemon configuration from JSON file"""
+    """Load daemon configuration from JSON file and return as dict"""
     try:
         path = Path(config_path).expanduser()
         if path.exists():
             with open(path) as f:
-                data = json.load(f)
-                # Map JSON keys to argparse argument names
-                return {
-                    'host': data.get('host'),
-                    'port': data.get('port'),
-                    'events_path': data.get('events_path'),
-                    'classified_path': data.get('classified_path'),
-                    'jobs_path': data.get('jobs_path'),
-                    'reports_dir': data.get('reports_dir'),
-                    'model': data.get('model'),
-                    'ollama_url': data.get('ollama_url'),
-                    'timeout': data.get('timeout'),
-                    'ai_enabled': data.get('ai_enabled'),
-                    'api_key': data.get('api_key'),
-                }
+                return json.load(f)
     except Exception:
         pass
     return {}

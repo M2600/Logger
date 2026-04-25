@@ -229,39 +229,42 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--shot", dest="capture_shot", action="store_true", help="Capture screenshot")
     parser.add_argument("--no-shot", dest="capture_shot", action="store_false", help="Disable screenshot")
     parser.set_defaults(capture_shot=True)
-    parser.add_argument("--shot-dir", default=str(DEFAULT_SHOT_DIR), help="Directory for screenshots")
+    parser.add_argument("--shot-dir", default=None, help="Directory for screenshots")
     parser.add_argument("--gui", action="store_true", help="Force GUI input (ignore message arguments)")
     parser.add_argument("--stdin", action="store_true", help="Read event body from stdin")
-    parser.add_argument("--type", default="thought", help="Event type (thought/stdin/git/system/...)")
-    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--type", default=None, help="Event type (thought/stdin/git/system/...)")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon (Bearer token)")
-    parser.add_argument("--config-file", type=str, default=None, help="Load daemon URL and API key from JSON config")
-    parser.add_argument("--timeout", type=float, default=0.8, help="POST /events timeout seconds")
+    parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
+    parser.add_argument("--timeout", type=float, default=None, help="POST /events timeout seconds")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     # parser.add_argument("--async", dest="async_mode", action="store_true", help="Process in background (all processing is async by default)")
     parser.add_argument("message", nargs="*", help="Event body. If omitted, GUI or stdin is used.")
     
     args = parser.parse_args(argv[1:])
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
         config_data = load_client_config(args.config_file)
-        if args.daemon_url == DEFAULT_DAEMON_URL and 'daemon_url' in config_data:
-            args.daemon_url = config_data['daemon_url']
-        if args.api_key is None and 'api_key' in config_data:
-            args.api_key = config_data['api_key']
-        if args.shot_dir == str(DEFAULT_SHOT_DIR) and 'shot_dir' in config_data:
-            args.shot_dir = config_data['shot_dir']
-        if not args.gui and 'gui' in config_data:
-            args.gui = config_data['gui']
-        if not args.stdin and 'stdin' in config_data:
-            args.stdin = config_data['stdin']
-        if args.type == "thought" and 'type' in config_data:
-            args.type = config_data['type']
-        if args.timeout == 0.8 and 'timeout' in config_data:
-            args.timeout = config_data['timeout']
-        if not args.debug and 'debug' in config_data:
-            args.debug = config_data['debug']
+    
+    # Apply config file values if CLI arg not provided
+    if args.shot_dir is None:
+        args.shot_dir = config_data.get('shot_dir', str(DEFAULT_SHOT_DIR))
+    if args.type is None:
+        args.type = config_data.get('type', 'thought')
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 0.8)
+    if not args.gui:
+        args.gui = config_data.get('gui', False)
+    if not args.stdin:
+        args.stdin = config_data.get('stdin', False)
+    if not args.debug:
+        args.debug = config_data.get('debug', False)
     
     return args
 
@@ -272,9 +275,9 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
         description=f"Core-Stream {label}: request /reports/generate from daemon"
     )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
-    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
-    parser.add_argument("--timeout", type=float, default=15.0, help="POST /reports/generate timeout seconds")
+    parser.add_argument("--timeout", type=float, default=None, help="POST /reports/generate timeout seconds")
     parser.add_argument("--period", choices=["today", "week", "range"], default="today", help="Time window")
     parser.add_argument("--from-date", help="Range start date (YYYY-MM-DD), required for --period range")
     parser.add_argument("--to-date", help="Range end date (YYYY-MM-DD, inclusive)")
@@ -285,15 +288,17 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
     args = parser.parse_args(argv[2:])
     args.mode = mode
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
         config_data = load_client_config(args.config_file)
-        if args.daemon_url == DEFAULT_DAEMON_URL and 'daemon_url' in config_data:
-            args.daemon_url = config_data['daemon_url']
-        if args.api_key is None and 'api_key' in config_data:
-            args.api_key = config_data['api_key']
-        if args.timeout == 15.0 and 'timeout' in config_data:
-            args.timeout = config_data['timeout']
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 15.0)
     
     return args
 
@@ -301,21 +306,23 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
 def parse_settings_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream settings: update daemon runtime settings")
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
-    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
-    parser.add_argument("--timeout", type=float, default=10.0, help="POST /settings/ai timeout seconds")
+    parser.add_argument("--timeout", type=float, default=None, help="POST /settings/ai timeout seconds")
     parser.add_argument("--ai", choices=["on", "off"], required=True, help="Enable/disable daemon AI worker")
     args = parser.parse_args(argv[2:])
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
         config_data = load_client_config(args.config_file)
-        if args.daemon_url == DEFAULT_DAEMON_URL and 'daemon_url' in config_data:
-            args.daemon_url = config_data['daemon_url']
-        if args.api_key is None and 'api_key' in config_data:
-            args.api_key = config_data['api_key']
-        if args.timeout == 10.0 and 'timeout' in config_data:
-            args.timeout = config_data['timeout']
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 10.0)
     
     return args
 
@@ -323,21 +330,23 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
 def parse_status_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream status: check daemon health and state")
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
-    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
-    parser.add_argument("--timeout", type=float, default=5.0, help="GET /health timeout seconds")
+    parser.add_argument("--timeout", type=float, default=None, help="GET /health timeout seconds")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     args = parser.parse_args(argv[2:])
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
         config_data = load_client_config(args.config_file)
-        if args.daemon_url == DEFAULT_DAEMON_URL and 'daemon_url' in config_data:
-            args.daemon_url = config_data['daemon_url']
-        if args.api_key is None and 'api_key' in config_data:
-            args.api_key = config_data['api_key']
-        if args.timeout == 5.0 and 'timeout' in config_data:
-            args.timeout = config_data['timeout']
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 5.0)
     
     return args
 
@@ -345,20 +354,22 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
 def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream backfill: retry classification of unclassified events")
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
-    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
-    parser.add_argument("--timeout", type=float, default=30.0, help="POST /analyze/backfill timeout seconds")
+    parser.add_argument("--timeout", type=float, default=None, help="POST /analyze/backfill timeout seconds")
     args = parser.parse_args(argv[2:])
     
-    # Load from config file if specified (CLI args override)
+    # Priority: CLI arg > config file > default
+    config_data = {}
     if args.config_file:
         config_data = load_client_config(args.config_file)
-        if args.daemon_url == DEFAULT_DAEMON_URL and 'daemon_url' in config_data:
-            args.daemon_url = config_data['daemon_url']
-        if args.api_key is None and 'api_key' in config_data:
-            args.api_key = config_data['api_key']
-        if args.timeout == 30.0 and 'timeout' in config_data:
-            args.timeout = config_data['timeout']
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 30.0)
     
     return args
 

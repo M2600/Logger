@@ -15,6 +15,7 @@ DEFAULT_EVENT_PATH = Path.home() / "thought_stream.jsonl"
 DEFAULT_CLASSIFIED_PATH = Path.home() / ".core_stream_classified.jsonl"
 DEFAULT_JOBS_PATH = Path.home() / ".core_stream_analysis_jobs.jsonl"
 DEFAULT_REPORT_DIR = Path.cwd() / "reports"
+DEFAULT_SCREENSHOT_DIR = Path.home() / ".logger" / "screenshots"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 BROWSER_SUFFIXES = [

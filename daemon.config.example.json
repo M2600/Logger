@@ -9,5 +9,6 @@
   "events_path": "~/thought_stream.jsonl",
   "classified_path": "~/.core_stream_classified.jsonl",
   "jobs_path": "~/.core_stream_analysis_jobs.jsonl",
-  "reports_dir": "./reports"
+  "reports_dir": "./reports",
+  "screenshot_dir": "~/.logger/screenshots"
 }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import platform
@@ -155,6 +156,24 @@ def get_gui_input() -> str:
 def make_screenshot_path(shot_dir: Path) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return shot_dir / f"{stamp}.png"
+
+
+def capture_screenshot_base64() -> tuple[bool, str, str]:
+    """Capture screenshot and return Base64-encoded PNG data"""
+    try:
+        import mss  # type: ignore
+        import mss.tools  # type: ignore
+    except Exception as exc:
+        return False, "", f"mss import failed: {exc}"
+    try:
+        with mss.MSS() as sct:
+            monitor = sct.monitors[0]
+            shot = sct.grab(monitor)
+            png_data = mss.tools.to_png(shot.rgb, shot.size)
+            b64_data = base64.b64encode(png_data).decode('utf-8')
+            return True, b64_data, ""
+    except Exception as exc:
+        return False, "", str(exc)
 
 
 def capture_screenshot(output_path: Path) -> tuple[bool, str, str]:
@@ -479,16 +498,13 @@ def post_event(args: argparse.Namespace) -> int:
         page_title = extract_page_title(window_title)
         debug_log(args, f"window_title={window_title}")
         
-        shot_ok = False
-        shot_path = "unknown"
+        screenshot_data = ""
         shot_error = ""
         if args.capture_shot:
             time.sleep(0.15)
             debug_log(args, "process_event: capturing screenshot")
-            shot_ok, shot_path, shot_error = capture_screenshot(
-                make_screenshot_path(Path(args.shot_dir).expanduser())
-            )
-            debug_log(args, f"screenshot: ok={shot_ok}, path={shot_path}, error={shot_error}")
+            shot_ok, screenshot_data, shot_error = capture_screenshot_base64()
+            debug_log(args, f"screenshot: ok={shot_ok}, error={shot_error}")
         
         payload = {
             "type": args.type,
@@ -508,12 +524,16 @@ def post_event(args: argparse.Namespace) -> int:
                 "project_hint": infer_project_hint(os.getcwd(), window_title),
                 "screenshot": {
                     "enabled": bool(args.capture_shot),
-                    "ok": shot_ok,
-                    "path": shot_path if args.capture_shot else "",
+                    "ok": bool(screenshot_data),
                     "error": shot_error,
                 },
             },
         }
+        
+        # Include screenshot data if captured
+        if screenshot_data:
+            payload["screenshot_data"] = screenshot_data
+        
         url = args.daemon_url.rstrip("/") + "/events"
         debug_log(args, f"posting to {url}")
         try:
@@ -534,6 +554,8 @@ def post_event(args: argparse.Namespace) -> int:
     thread = threading.Thread(target=process_event, daemon=True)
     thread.start()
     debug_log(args, "thread started, returning control to user immediately")
+    # Wait for thread to complete before exiting (with timeout)
+    thread.join(timeout=30)
     return 0
 
 

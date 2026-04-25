@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import queue
 import threading
@@ -13,7 +14,7 @@ from typing import Any, Literal, Optional
 
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, Form, UploadFile
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,6 +26,7 @@ from core_stream_engine import (
     DEFAULT_JOBS_PATH,
     DEFAULT_OLLAMA_URL,
     DEFAULT_REPORT_DIR,
+    DEFAULT_SCREENSHOT_DIR,
     append_jsonl,
     build_report_payload,
     classify_event,
@@ -47,6 +49,7 @@ class EventIn(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
+    screenshot_data: str | None = None  # Base64-encoded PNG image
 
 
 class AiSettingsIn(BaseModel):
@@ -115,12 +118,14 @@ class DaemonState:
         classified_path: Path,
         jobs_path: Path,
         reports_dir: Path,
+        screenshot_dir: Path,
         settings: RuntimeSettings,
     ) -> None:
         self.events_path = events_path
         self.classified_path = classified_path
         self.jobs_path = jobs_path
         self.reports_dir = reports_dir
+        self.screenshot_dir = screenshot_dir
         self.settings = settings
         self.lock = threading.Lock()
         self.analysis_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -449,6 +454,20 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
             "meta": event_in.meta,
             "created_at": event_in.created_at or now_iso(),
         }
+        
+        # Handle screenshot if provided
+        screenshot_path = ""
+        if event_in.screenshot_data:
+            try:
+                state.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                stamp = event["created_at"].replace(":", "").replace("-", "").replace(".", "_")
+                screenshot_path = state.screenshot_dir / f"{event['id']}_{stamp}.png"
+                image_bytes = base64.b64decode(event_in.screenshot_data)
+                screenshot_path.write_bytes(image_bytes)
+                event["meta"]["screenshot_path"] = str(screenshot_path)
+            except Exception as exc:
+                event["meta"]["screenshot_error"] = str(exc)
+        
         append_jsonl(state.events_path, event)
         if state.settings.ai_enabled:
             state.enqueue_job(event, "pending")
@@ -537,6 +556,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--jobs-path", default=None, help="JSONL analysis jobs path")
     parser.add_argument("--reports-dir", default=None, help="Report output directory")
+    parser.add_argument("--screenshot-dir", default=None, help="Screenshot storage directory")
     parser.add_argument("--model", default=None, help="Ollama model for classification/refine")
     parser.add_argument("--ollama-url", default=None, help="Ollama /api/generate URL")
     parser.add_argument("--timeout", type=float, default=None, help="Ollama HTTP timeout seconds")
@@ -572,6 +592,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.jobs_path = config_data.get('jobs_path', str(DEFAULT_JOBS_PATH))
     if args.reports_dir is None:
         args.reports_dir = config_data.get('reports_dir', str(DEFAULT_REPORT_DIR))
+    if args.screenshot_dir is None:
+        args.screenshot_dir = config_data.get('screenshot_dir', str(DEFAULT_SCREENSHOT_DIR))
     if args.model is None:
         args.model = config_data.get('model', 'gemma2')
     if args.ollama_url is None:
@@ -614,6 +636,7 @@ def main(argv: list[str]) -> int:
         classified_path=Path(args.classified_path).expanduser(),
         jobs_path=Path(args.jobs_path).expanduser(),
         reports_dir=Path(args.reports_dir).expanduser(),
+        screenshot_dir=Path(args.screenshot_dir).expanduser(),
         settings=settings,
     )
     # On startup, rebuild classified.jsonl to remove stale entries from failed retries

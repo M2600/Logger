@@ -107,16 +107,20 @@ HTTP POST /events（デーモンへ送信）
 **CLI オプション:**
 - `--gui`: GUI 入力を強制（メッセージ引数を無視）
 - `--stdin`: stdin から入力を読み取る
+- `--shot`: スクリーンショット撮影を有効化（デフォルト: 有効）
 - `--no-shot`: スクリーンショット撮影を無効化
-- `--shot-dir DIR`: スクリーンショット保存先
 - `--type TYPE`: イベント種別（デフォルト: thought）
 - `--daemon-url URL`: デーモン接続先（デフォルト: http://127.0.0.1:8765）
 - `--timeout SEC`: タイムアウト時間（デフォルト: 0.8秒）
 - `--debug`: デバッグログ出力（タイムスタンプ付き stderr に記録）
-- `--async`: イベント送信をバックグラウンドスレッドで実行（デフォルト: 有効）
-  - スレッドは非デーモンモード（daemon=False）で実行
-  - thread.join(timeout=2.0) で送信完了を待つ
-  - → ユーザーへの制御復帰前に HTTP POST が完了することを保証
+
+**スクリーンショット送信（新機能）:**
+- ✅ クライアント側でスクリーンショットを撮影
+- ✅ Base64 エンコードして JSON に含める
+- ✅ daemon 側で受け取り、PNG として保存
+- ✅ 保存先: `~/.logger/screenshots/` （--screenshot-dir で指定可能）
+- ✅ イベント JSON に `meta.screenshot_path` として保存先を記録
+- ✅ ローカル保存は廃止、daemon 側一元管理
 
 **入力検証:**
 - 複数引数の空文字は自動フィルタ（`python log.py "" test ""`→ "test"）
@@ -495,11 +499,12 @@ python log.py "Hello from remote"
   "events_path": "~/thought_stream.jsonl",
   "classified_path": "~/.core_stream_classified.jsonl",
   "jobs_path": "~/.core_stream_analysis_jobs.jsonl",
-  "reports_dir": "./reports"
+  "reports_dir": "./reports",
+  "screenshot_dir": "~/.logger/screenshots"
 }
 ```
 
-**対応オプション:** host, port, events_path, classified_path, jobs_path, reports_dir, model, ollama_url, timeout, ai_enabled, api_key (11項目)
+**対応オプション:** host, port, events_path, classified_path, jobs_path, reports_dir, screenshot_dir, model, ollama_url, timeout, ai_enabled, api_key (12項目)
 
 ### Client 設定ファイル (`client.config.example.json`)
 ```json
@@ -572,6 +577,15 @@ python daemon.py --config-file ~/.logger/daemon.json --port 9000 --model llama2 
 - ✅ Client: Bearer token header injection
 - ✅ Web UI: Optional API key input field
 - ✅ Backward compatible (auth disabled by default)
+
+**スクリーンショット送信・保存:**
+- ✅ Client: Base64 エンコード機能 (capture_screenshot_base64)
+- ✅ Daemon: screenshot_data フィールド対応
+- ✅ Daemon: Base64 デコード・PNG 保存機能
+- ✅ Daemon: --screenshot-dir オプション（デフォルト: ~/.logger/screenshots）
+- ✅ Daemon: 設定ファイル対応
+- ✅ Client: thread.join(timeout=30) で送信完了待機
+- ✅ Event meta に screenshot_path を記録
 
 ---
 

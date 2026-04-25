@@ -1,7 +1,6 @@
 {
   "daemon_url": "http://localhost:8765",
   "api_key": "your-secret-key-here",
-  "shot_dir": "~/thought_stream_shots",
   "type": "thought",
   "timeout": 0.8,
   "debug": false,

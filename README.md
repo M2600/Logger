@@ -42,12 +42,13 @@ python log.py "my thought"
 python daemon.py --host 127.0.0.1 --port 8765 --model gemma2
 ```
 
-主な保存先:
+主な保存先（すべて `~/.logger/` 配下に統一）:
 
-- events: `~/thought_stream.jsonl`
-- classify cache: `~/.core_stream_classified.jsonl`
-- analysis jobs: `~/.core_stream_analysis_jobs.jsonl`
-- reports: `./reports/`
+- events: `~/.logger/events.jsonl`
+- classify cache: `~/.logger/classified.jsonl`
+- analysis jobs: `~/.logger/jobs.jsonl`
+- reports: `~/.logger/reports/`
+- screenshots: `~/.logger/screenshots/`
 
 ## 2. Send logs from client
 
@@ -68,11 +69,7 @@ git diff | python log.py --stdin --type stdin
 python log.py --no-shot "no screenshot"
 ```
 
-保存先を変更:
-
-```bash
-python log.py --shot-dir ~/my_shots "custom shot dir"
-```
+スクリーンショットはすべてdaemon側の `~/.logger/screenshots/` に保存されます。
 
 ## 3. Generate outputs
 

@@ -231,7 +231,33 @@ python log.py --api-key "prod-key-super-secret" "Production issue"
 
 ---
 
-## Config File Format
+## Default Storage Paths
+
+All daemon storage paths are consolidated under `~/.logger/` for organization:
+
+- **Events:** `~/.logger/events.jsonl` (all logged events)
+- **Classified:** `~/.logger/classified.jsonl` (LLM classification cache)
+- **Jobs:** `~/.logger/jobs.jsonl` (analysis job history)
+- **Reports:** `~/.logger/reports/` (generated reports)
+- **Screenshots:** `~/.logger/screenshots/` (captured screenshots)
+
+These can be customized via CLI arguments or config file:
+
+```bash
+# CLI override
+python daemon.py --events-path ~/custom/events.jsonl --screenshot-dir ~/custom/screenshots
+
+# Config file (daemon.json)
+{
+  "events_path": "~/.logger/events.jsonl",
+  "classified_path": "~/.logger/classified.jsonl",
+  "jobs_path": "~/.logger/jobs.jsonl",
+  "reports_dir": "~/.logger/reports",
+  "screenshot_dir": "~/.logger/screenshots"
+}
+```
+
+---
 
 ### Daemon Config (`daemon.json`)
 

@@ -496,10 +496,10 @@ python log.py "Hello from remote"
   "timeout": 120.0,
   "ai_enabled": true,
   "api_key": "your-secret-key-here",
-  "events_path": "~/thought_stream.jsonl",
-  "classified_path": "~/.core_stream_classified.jsonl",
-  "jobs_path": "~/.core_stream_analysis_jobs.jsonl",
-  "reports_dir": "./reports",
+  "events_path": "~/.logger/events.jsonl",
+  "classified_path": "~/.logger/classified.jsonl",
+  "jobs_path": "~/.logger/jobs.jsonl",
+  "reports_dir": "~/.logger/reports",
   "screenshot_dir": "~/.logger/screenshots"
 }
 ```

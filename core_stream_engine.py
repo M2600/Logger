@@ -230,12 +230,22 @@ def parse_classification_json(text: str) -> dict[str, Any]:
 
 def build_classify_prompt(event: dict[str, Any], project: str) -> str:
     ctx = event.get("context") if isinstance(event.get("context"), dict) else {}
+    source = event.get("source", "")
     schema = (
         '{"summary":"...",'
         '"done":["..."],'
         '"todos":[{"task":"...","priority":1,"context":"..."}],'
         '"tags":["..."]}'
     )
+    
+    # For GUI input, prioritize window context over directory
+    priority_notice = ""
+    if source == "gui":
+        priority_notice = (
+            "\n*** CONTEXT PRIORITY: This was logged from GUI input. "
+            "Prioritize window/page_title context over cwd for project/task identification. ***"
+        )
+    
     return (
         "Classify this single development log into factual progress and actionable todos. "
         "Ignore emotional noise and return strict JSON only.\n"
@@ -246,6 +256,7 @@ def build_classify_prompt(event: dict[str, Any], project: str) -> str:
         f"cwd: {ctx.get('cwd', 'unknown')}\n"
         f"page_title: {ctx.get('page_title', 'unknown')}\n"
         f"win: {ctx.get('win', 'unknown')}\n"
+        f"{priority_notice}"
     )
 
 

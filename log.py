@@ -377,7 +377,35 @@ def generate_report(args: argparse.Namespace) -> int:
         print(f"failed to request report: {exc}", file=sys.stderr)
         return 1
     if response.status_code != 200:
-        print(f"daemon report error: HTTP {response.status_code} {response.text[:300]}", file=sys.stderr)
+        try:
+            error_data = response.json()
+            detail = error_data.get("detail", {})
+            if isinstance(detail, dict):
+                message = detail.get("message", "Unknown error")
+                print(f"daemon report error: HTTP {response.status_code}: {message}", file=sys.stderr)
+                warnings = detail.get("warnings", [])
+                if warnings:
+                    print("\nWarnings:", file=sys.stderr)
+                    for w in warnings:
+                        if isinstance(w, dict):
+                            code = w.get("code", "")
+                            msg = w.get("message", "")
+                            prefix = f"  [{code}] " if code else "  "
+                            print(prefix + msg, file=sys.stderr)
+                hint = detail.get("hint", "")
+                if hint:
+                    print(f"\nHint: {hint}", file=sys.stderr)
+                failures = detail.get("recent_analysis_failures", [])
+                if failures:
+                    print("\nRecent failures:", file=sys.stderr)
+                    for f in failures[:3]:
+                        if isinstance(f, dict):
+                            print(f"  Event: {f.get('event_id', 'unknown')[:8]}", file=sys.stderr)
+                            print(f"    Error: {f.get('error', 'unknown')[:100]}", file=sys.stderr)
+            else:
+                print(f"daemon report error: HTTP {response.status_code} {response.text[:500]}", file=sys.stderr)
+        except ValueError:
+            print(f"daemon report error: HTTP {response.status_code} {response.text[:500]}", file=sys.stderr)
         return 1
     data = response.json()
     print_warnings(data)

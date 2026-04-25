@@ -531,10 +531,9 @@ def post_event(args: argparse.Namespace) -> int:
             debug_log(args, f"request failed: {exc}")
             print(f"failed to send event to daemon: {exc}", file=sys.stderr)
     
-    thread = threading.Thread(target=process_event, daemon=False)
+    thread = threading.Thread(target=process_event, daemon=True)
     thread.start()
-    debug_log(args, "waiting for thread to complete (max 2s)")
-    thread.join(timeout=2.0)
+    debug_log(args, "thread started, returning control to user immediately")
     return 0
 
 

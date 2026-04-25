@@ -66,11 +66,11 @@ Then start daemon with:
 python daemon.py --config-file ~/.logger/daemon.json
 ```
 
-#### Client Config: `~/.logger/config.json`
+#### Client Config: `~/.logger/client.json`
 
 ```bash
 mkdir -p ~/.logger
-cat > ~/.logger/config.json << 'EOF'
+cat > ~/.logger/client.json << 'EOF'
 {
   "api_key": "your-secret-key-here",
   "daemon_url": "http://remote-server:8765"
@@ -81,7 +81,13 @@ EOF
 Then use client with:
 
 ```bash
-python log.py --config-file ~/.logger/config.json "My thought"
+python log.py --config-file ~/.logger/client.json "My thought"
+```
+
+Or auto-load (without specifying `--config-file`):
+
+```bash
+python log.py "My thought"
 ```
 
 ### 3. Environment Variables (Lowest Priority)
@@ -104,28 +110,59 @@ python log.py report --period today --format md
 
 ## Priority Order
 
-For API key resolution, the client checks in this order:
+### Option Priority (Applies to all options)
+
+1. **CLI Arguments** (Highest)
+   - Explicitly specified arguments override everything
+   - Example: `python daemon.py --config-file ~/.logger/daemon.json --port 9000`
+
+2. **Config File Values**
+   - Used if option not specified via CLI
+   - Allows centralized configuration
+
+3. **Default Values** (Lowest)
+   - Built-in defaults used if nothing else specified
+
+### Auto-Loading Config Files
+
+If no `--config-file` is specified, these default paths are checked automatically:
+
+**Daemon:**
+- `~/.logger/daemon.json` (if exists)
+
+**Client (all commands):**
+- `~/.logger/client.json` (if exists)
+
+Example - no flag needed:
+```bash
+# Setup once
+cp daemon.config.example.json ~/.logger/daemon.json
+cp client.config.example.json ~/.logger/client.json
+
+# Then just run - config auto-loads!
+python daemon.py
+python log.py "My thought"
+python log.py status
+```
+
+### API Key Resolution (Client Only)
+
+For backwards compatibility with environment variables:
 
 1. **CLI Argument** (`--api-key "key"`)
    - Highest priority
-   - Useful for one-off commands
 
-2. **Config File** (`--config-file path/to/config.json`)
+2. **Config File** (from `client.json`)
    - Middle priority
-   - JSON file with `api_key` field
 
 3. **Environment Variable** (`LOGGER_API_KEY`)
    - Lowest priority
-   - Set once, used for all invocations
 
 **Example:**
 ```bash
-# This would use "cli-key" (highest priority)
 export LOGGER_API_KEY="env-key"
-python log.py --api-key "cli-key" "message"
-
-# This would use "env-key" (no CLI arg)
-python log.py "message"
+python log.py --api-key "cli-key" "message"  # Uses "cli-key"
+python log.py "message"                       # Uses "env-key"
 ```
 
 ---

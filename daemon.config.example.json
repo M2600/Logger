@@ -1,5 +1,13 @@
 {
-  "api_key": "your-secret-key-here",
+  "host": "127.0.0.1",
   "port": 8765,
-  "ai_enabled": true
+  "model": "gemma2",
+  "ollama_url": "http://127.0.0.1:11434/api/generate",
+  "timeout": 120.0,
+  "ai_enabled": true,
+  "api_key": "your-secret-key-here",
+  "events_path": "~/thought_stream.jsonl",
+  "classified_path": "~/.core_stream_classified.jsonl",
+  "jobs_path": "~/.core_stream_analysis_jobs.jsonl",
+  "reports_dir": "./reports"
 }

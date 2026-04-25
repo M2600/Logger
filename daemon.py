@@ -521,9 +521,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Core-Stream daemon API server",
         epilog=(
             "endpoints: /health, /settings, /settings/ai, /events, /analyze/backfill, /reports/generate\n"
-            "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2 --api-key my-secret-key"
+            "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2 --api-key my-secret-key\n"
+            "or: python daemon.py --config-file ~/.logger/daemon.json"
         ),
     )
+    parser.add_argument("--config-file", type=str, default=None, help="Load all settings from JSON config file (CLI args override)")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
     parser.add_argument("--events-path", default=str(DEFAULT_EVENT_PATH), help="JSONL event store path")
@@ -540,8 +542,44 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ai-enabled", action="store_true", default=True, help="Enable AI worker (default)")
     parser.add_argument("--ai-disabled", dest="ai_enabled", action="store_false", help="Disable AI worker")
     parser.add_argument("--api-key", type=str, default=None, help="Enable API key authentication (Bearer token)")
-    parser.add_argument("--config-file", type=str, default=None, help="Load API key from JSON config file")
-    return parser.parse_args(argv[1:])
+    
+    args = parser.parse_args(argv[1:])
+    
+    # Load from config file if specified (CLI args override)
+    if args.config_file:
+        config_args = _load_daemon_config(args.config_file)
+        # Override only if CLI arg is default (not explicitly set)
+        for key, value in config_args.items():
+            if key not in ('config_file',) and value is not None:
+                setattr(args, key, value)
+    
+    return args
+
+
+def _load_daemon_config(config_path: str) -> dict[str, Any]:
+    """Load daemon configuration from JSON file"""
+    try:
+        path = Path(config_path).expanduser()
+        if path.exists():
+            with open(path) as f:
+                data = json.load(f)
+                # Map JSON keys to argparse argument names
+                return {
+                    'host': data.get('host'),
+                    'port': data.get('port'),
+                    'events_path': data.get('events_path'),
+                    'classified_path': data.get('classified_path'),
+                    'jobs_path': data.get('jobs_path'),
+                    'reports_dir': data.get('reports_dir'),
+                    'model': data.get('model'),
+                    'ollama_url': data.get('ollama_url'),
+                    'timeout': data.get('timeout'),
+                    'ai_enabled': data.get('ai_enabled'),
+                    'api_key': data.get('api_key'),
+                }
+    except Exception:
+        pass
+    return {}
 
 
 def main(argv: list[str]) -> int:

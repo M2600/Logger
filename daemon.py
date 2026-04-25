@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from core_stream_engine import (
@@ -333,6 +335,14 @@ def build_warnings(state: DaemonState) -> list[dict[str, str]]:
 
 def build_app(state: DaemonState) -> FastAPI:
     app = FastAPI(title="Core-Stream Daemon", version="1.0.0")
+
+    @app.get("/")
+    def index() -> FileResponse:
+        """Serve web UI for event logging"""
+        index_path = Path(__file__).parent / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path, media_type="text/html")
+        return {"message": "Core-Stream Daemon API. Use POST /events to log, GET /health for status"}
 
     @app.get("/health")
     def health() -> dict[str, Any]:

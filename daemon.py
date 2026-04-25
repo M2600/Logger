@@ -522,7 +522,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog=(
             "endpoints: /health, /settings, /settings/ai, /events, /analyze/backfill, /reports/generate\n"
             "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2 --api-key my-secret-key\n"
-            "or: python daemon.py --config-file ~/.logger/daemon.json"
+            "or: python daemon.py --config-file ~/.logger/daemon.json\n"
+            "or: python daemon.py (auto-loads ~/.logger/daemon.json if exists)"
         ),
     )
     parser.add_argument("--config-file", type=str, default=None, help="Load all settings from JSON config file (CLI args override)")
@@ -547,8 +548,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = _load_daemon_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default paths
+    if not config_file:
+        default_daemon_config = Path.home() / '.logger' / 'daemon.json'
+        if default_daemon_config.exists():
+            config_file = str(default_daemon_config)
+    
+    if config_file:
+        config_data = _load_daemon_config(config_file)
     
     # Apply defaults in reverse priority order
     if args.host is None:

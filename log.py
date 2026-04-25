@@ -245,8 +245,16 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = load_client_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default path
+    if not config_file:
+        default_client_config = Path.home() / '.logger' / 'client.json'
+        if default_client_config.exists():
+            config_file = str(default_client_config)
+    
+    if config_file:
+        config_data = load_client_config(config_file)
     
     # Apply config file values if CLI arg not provided
     if args.shot_dir is None:
@@ -290,8 +298,16 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = load_client_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default path
+    if not config_file:
+        default_client_config = Path.home() / '.logger' / 'client.json'
+        if default_client_config.exists():
+            config_file = str(default_client_config)
+    
+    if config_file:
+        config_data = load_client_config(config_file)
     
     if args.daemon_url is None:
         args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
@@ -314,8 +330,16 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = load_client_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default path
+    if not config_file:
+        default_client_config = Path.home() / '.logger' / 'client.json'
+        if default_client_config.exists():
+            config_file = str(default_client_config)
+    
+    if config_file:
+        config_data = load_client_config(config_file)
     
     if args.daemon_url is None:
         args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
@@ -338,8 +362,16 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = load_client_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default path
+    if not config_file:
+        default_client_config = Path.home() / '.logger' / 'client.json'
+        if default_client_config.exists():
+            config_file = str(default_client_config)
+    
+    if config_file:
+        config_data = load_client_config(config_file)
     
     if args.daemon_url is None:
         args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
@@ -361,8 +393,16 @@ def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
     
     # Priority: CLI arg > config file > default
     config_data = {}
-    if args.config_file:
-        config_data = load_client_config(args.config_file)
+    config_file = args.config_file
+    
+    # If no config file specified, try default path
+    if not config_file:
+        default_client_config = Path.home() / '.logger' / 'client.json'
+        if default_client_config.exists():
+            config_file = str(default_client_config)
+    
+    if config_file:
+        config_data = load_client_config(config_file)
     
     if args.daemon_url is None:
         args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)

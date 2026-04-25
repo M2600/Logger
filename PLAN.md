@@ -465,10 +465,22 @@ python log.py "Hello from remote"
 ### 優先順位（重要）
 **CLI 引数 > 設定ファイル > デフォルト値**
 
+#### デフォルト設定ファイルパス
+明示的に `--config-file` を指定しなくても、以下のデフォルトパスが存在すれば自動的に読み込まれます：
+
+**Daemon:**
+- `~/.logger/daemon.json` （自動検出）
+- または明示的に `--config-file ~/.logger/daemon.json`
+
+**Client:**
+- `~/.logger/client.json` （自動検出）
+- または明示的に `--config-file ~/.logger/client.json`
+
 実装方法：
 - argparse のデフォルト値を `None` に設定
 - parse_args() で解析後、`None` 値のみ config/default から取得
 - CLI 引数が明示的に指定されていれば、値は `None` 以外となり優先される
+- `--config-file` が指定されていなければ、デフォルトパスを確認して存在すれば使用
 
 ### Daemon 設定ファイル (`daemon.config.example.json`)
 ```json

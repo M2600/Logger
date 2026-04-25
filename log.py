@@ -179,17 +179,19 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
         description="Core-Stream client (default: send one event to daemon)",
         epilog=(
             "subcommands:\n"
-            "  report   request progress report from daemon\n"
-            "  next     request todo list from daemon\n"
-            "  settings update daemon AI setting\n"
-            "  status   check daemon health and state\n\n"
+            "  report    request progress report from daemon\n"
+            "  next      request todo list from daemon\n"
+            "  settings  update daemon AI setting\n"
+            "  status    check daemon health and state\n"
+            "  backfill  retry classification of unclassified events\n\n"
             "examples:\n"
             "  python log.py \"fix docker bug\"\n"
             "  python log.py --gui\n"
             "  python log.py report --period today --format md\n"
             "  python log.py next --llm never --format json\n"
             "  python log.py settings --ai on\n"
-            "  python log.py status"
+            "  python log.py status\n"
+            "  python log.py backfill"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -240,6 +242,13 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
     parser.add_argument("--timeout", type=float, default=5.0, help="GET /health timeout seconds")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+    return parser.parse_args(argv[2:])
+
+
+def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Core-Stream backfill: retry classification of unclassified events")
+    parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--timeout", type=float, default=30.0, help="POST /analyze/backfill timeout seconds")
     return parser.parse_args(argv[2:])
 
 
@@ -500,6 +509,30 @@ def check_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_backfill(args: argparse.Namespace) -> int:
+    url = args.daemon_url.rstrip("/") + "/analyze/backfill"
+    debug_log(args, f"requesting backfill at {url}")
+    try:
+        response = requests.post(url, json={}, timeout=args.timeout)
+    except requests.RequestException as exc:
+        print(f"failed to request backfill: {exc}", file=sys.stderr)
+        return 1
+    if response.status_code != 200:
+        print(f"daemon backfill error: HTTP {response.status_code}", file=sys.stderr)
+        try:
+            print(f"  {response.json()}", file=sys.stderr)
+        except ValueError:
+            print(f"  {response.text[:300]}", file=sys.stderr)
+        return 1
+    
+    data = response.json()
+    queued = data.get("queued", 0)
+    print(f"Backfill started: {queued} events queued for re-analysis", file=sys.stderr)
+    print_warnings(data)
+    return 0
+
+
+
 def main(argv: list[str]) -> int:
     if len(argv) > 1 and argv[1] == "report":
         return generate_report(parse_report_args(argv, mode="report"))
@@ -509,6 +542,8 @@ def main(argv: list[str]) -> int:
         return update_settings(parse_settings_args(argv))
     if len(argv) > 1 and argv[1] == "status":
         return check_status(parse_status_args(argv))
+    if len(argv) > 1 and argv[1] == "backfill":
+        return run_backfill(parse_backfill_args(argv))
     return post_event(parse_log_args(argv))
 
 

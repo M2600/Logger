@@ -286,6 +286,22 @@ def classify_event(
     }
 
 
+def is_retriable_error(error_message: str) -> bool:
+    """Check if an error is temporary/retriable (vs permanent)."""
+    msg = str(error_message).lower()
+    # Retriable: network timeouts, connection refused, transient ollama issues
+    retriable_patterns = [
+        "timeout",
+        "connection refused",
+        "connection reset",
+        "broken pipe",
+        "temporarily unavailable",
+        "service unavailable",
+        "too many requests",
+        "read timed out",
+    ]
+    return any(pattern in msg for pattern in retriable_patterns)
+
 def resolve_period(
     *,
     period: Literal["today", "week", "range"],

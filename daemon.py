@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import queue
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -24,6 +26,7 @@ from core_stream_engine import (
     classify_event,
     event_fingerprint,
     filter_period,
+    is_retriable_error,
     load_jsonl,
     now_iso,
     rebuild_classified_from_jobs,
@@ -81,6 +84,7 @@ class DaemonState:
         self.settings = settings
         self.lock = threading.Lock()
         self.analysis_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+        self.retry_queue: queue.Queue[tuple[dict[str, Any], int]] = queue.Queue()  # (event, retry_count)
         self.resume_queued_on_startup = 0
         self.classified_ids = {
             str(item.get("record_id", "")).strip()
@@ -122,7 +126,15 @@ def start_worker(state: DaemonState) -> threading.Thread:
                     state.classified_ids.add(rid)
                 state.enqueue_job(event, "done")
             except Exception as exc:
-                state.enqueue_job(event, "failed", str(exc))
+                error_msg = str(exc)
+                state.enqueue_job(event, "failed", error_msg)
+                # Auto-retry if error is temporary (e.g., Ollama timeout)
+                if is_retriable_error(error_msg):
+                    # Schedule retry with exponential backoff (max 3 retries)
+                    retry_count = getattr(event, '_retry_count', 0)
+                    if retry_count < 3:
+                        delay = 5 * (2 ** retry_count)  # 5s, 10s, 20s
+                        state.retry_queue.put((event, retry_count + 1, delay))
             finally:
                 state.analysis_queue.task_done()
 
@@ -130,6 +142,39 @@ def start_worker(state: DaemonState) -> threading.Thread:
     thread.start()
     return thread
 
+
+def start_retry_manager(state: DaemonState) -> threading.Thread:
+    """Monitor retry_queue and re-queue events after delay."""
+    def _run() -> None:
+        pending_retries: dict[str, tuple[float, dict[str, Any], int]] = {}  # event_id -> (retry_time, event, count)
+        
+        while True:
+            # Check if any retries are ready
+            now = time.time()
+            ready_to_retry = [
+                eid for eid, (retry_time, _, _) in pending_retries.items()
+                if now >= retry_time
+            ]
+            for eid in ready_to_retry:
+                _, event, retry_count = pending_retries.pop(eid)
+                event_marker = f"{event.get('id', 'unknown')[:8]} (retry {retry_count}/3)"
+                state.analysis_queue.put(event)
+            
+            # Collect new retries
+            try:
+                while True:
+                    event, retry_count, delay = state.retry_queue.get_nowait()
+                    eid = event.get('id', '')
+                    retry_time = time.time() + delay
+                    pending_retries[eid] = (retry_time, event, retry_count)
+            except queue.Empty:
+                pass
+            
+            time.sleep(0.1)  # Check frequently for ready retries
+    
+    thread = threading.Thread(target=_run, name="core-stream-retry-manager", daemon=True)
+    thread.start()
+    return thread
 
 def recent_failed_jobs(state: DaemonState, limit: int = 3) -> list[dict[str, str]]:
     failures: list[dict[str, str]] = []
@@ -450,6 +495,7 @@ def main(argv: list[str]) -> int:
             if str(item.get("record_id", "")).strip()
         }
     start_worker(state)
+    start_retry_manager(state)
     state.resume_queued_on_startup = enqueue_unclassified_events(state)
     app = build_app(state)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

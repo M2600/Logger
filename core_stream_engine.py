@@ -39,7 +39,8 @@ class Period:
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now().astimezone().isoformat()
+
 
 
 def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
@@ -291,9 +292,9 @@ def resolve_period(
     from_date: str | None,
     to_date: str | None,
 ) -> Period:
-    now = datetime.now(timezone.utc)
+    now = datetime.now().astimezone()
     if period == "today":
-        start = datetime.combine(now.date(), dt_time.min, tzinfo=timezone.utc)
+        start = datetime.combine(now.date(), dt_time.min).astimezone()
         return Period(start=start, end=now)
     if period == "week":
         return Period(start=now - timedelta(days=7), end=now)
@@ -312,9 +313,10 @@ def resolve_period(
         end_day = start_day
     if end_day < start_day:
         raise ValueError("--to-date must be >= --from-date")
-    start = datetime.combine(start_day, dt_time.min, tzinfo=timezone.utc)
-    end = datetime.combine(end_day + timedelta(days=1), dt_time.min, tzinfo=timezone.utc)
+    start = datetime.combine(start_day, dt_time.min).astimezone()
+    end = datetime.combine(end_day + timedelta(days=1), dt_time.min).astimezone()
     return Period(start=start, end=end)
+
 
 
 def filter_period(rows: list[dict[str, Any]], period: Period) -> list[dict[str, Any]]:
@@ -510,7 +512,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
 
 def save_report_files(*, reports_dir: Path, mode: str, markdown: str, payload: dict[str, Any]) -> dict[str, str]:
     reports_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
     md_path = reports_dir / f"{stamp}_{mode}.md"
     json_path = reports_dir / f"{stamp}_{mode}.json"
     md_path.write_text(markdown, encoding="utf-8")

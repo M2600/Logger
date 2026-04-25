@@ -300,7 +300,7 @@ def print_warnings(payload: Any) -> None:
 
 def debug_log(args: argparse.Namespace, message: str) -> None:
     if getattr(args, 'debug', False):
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now().astimezone().isoformat()
         print(f"[debug {timestamp}] {message}", file=sys.stderr)
 
 
@@ -335,7 +335,7 @@ def post_event(args: argparse.Namespace) -> int:
             "type": args.type,
             "body": raw_text,
             "source": source,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now().astimezone().isoformat(),
             "context": {
                 "cwd": os.getcwd(),
                 "win": window_title or "unknown",

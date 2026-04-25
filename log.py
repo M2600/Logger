@@ -174,6 +174,25 @@ def capture_screenshot(output_path: Path) -> tuple[bool, str, str]:
         return False, "unknown", str(exc)
 
 
+def load_api_key(config_file: str | None = None) -> str | None:
+    """Load API key from env var, config file, or None"""
+    # Priority: env var > config file
+    if api_key := os.environ.get("LOGGER_API_KEY"):
+        return api_key
+    
+    if config_file:
+        try:
+            path = Path(config_file).expanduser()
+            if path.exists():
+                with open(path) as f:
+                    data = json.load(f)
+                    return data.get("api_key")
+        except Exception:
+            pass
+    
+    return None
+
+
 def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Core-Stream client (default: send one event to daemon)",
@@ -203,6 +222,8 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--stdin", action="store_true", help="Read event body from stdin")
     parser.add_argument("--type", default="thought", help="Event type (thought/stdin/git/system/...)")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon (Bearer token)")
+    parser.add_argument("--config-file", type=str, default=None, help="Load daemon URL and API key from JSON config")
     parser.add_argument("--timeout", type=float, default=0.8, help="POST /events timeout seconds")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     # parser.add_argument("--async", dest="async_mode", action="store_true", help="Process in background (all processing is async by default)")
@@ -216,6 +237,8 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
         description=f"Core-Stream {label}: request /reports/generate from daemon"
     )
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--config-file", type=str, default=None, help="Load API key from config file")
     parser.add_argument("--timeout", type=float, default=15.0, help="POST /reports/generate timeout seconds")
     parser.add_argument("--period", choices=["today", "week", "range"], default="today", help="Time window")
     parser.add_argument("--from-date", help="Range start date (YYYY-MM-DD), required for --period range")
@@ -232,6 +255,8 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
 def parse_settings_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream settings: update daemon runtime settings")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--config-file", type=str, default=None, help="Load API key from config file")
     parser.add_argument("--timeout", type=float, default=10.0, help="POST /settings/ai timeout seconds")
     parser.add_argument("--ai", choices=["on", "off"], required=True, help="Enable/disable daemon AI worker")
     return parser.parse_args(argv[2:])
@@ -240,6 +265,8 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
 def parse_status_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream status: check daemon health and state")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--config-file", type=str, default=None, help="Load API key from config file")
     parser.add_argument("--timeout", type=float, default=5.0, help="GET /health timeout seconds")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
     return parser.parse_args(argv[2:])
@@ -248,6 +275,8 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
 def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Core-Stream backfill: retry classification of unclassified events")
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--config-file", type=str, default=None, help="Load API key from config file")
     parser.add_argument("--timeout", type=float, default=30.0, help="POST /analyze/backfill timeout seconds")
     return parser.parse_args(argv[2:])
 
@@ -296,6 +325,23 @@ def print_warnings(payload: Any) -> None:
         print(prefix + message, file=sys.stderr)
         if action:
             print(f"  action: {action}", file=sys.stderr)
+
+
+def get_request_headers(args: argparse.Namespace) -> dict[str, str]:
+    """Build HTTP headers including API key if configured"""
+    headers = {"Content-Type": "application/json"}
+    
+    # Priority: CLI arg > config file > env var
+    api_key = args.api_key if hasattr(args, 'api_key') and args.api_key else None
+    if not api_key and hasattr(args, 'config_file') and args.config_file:
+        api_key = load_api_key(args.config_file)
+    if not api_key:
+        api_key = load_api_key()
+    
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    
+    return headers
 
 
 def debug_log(args: argparse.Namespace, message: str) -> None:
@@ -358,7 +404,7 @@ def post_event(args: argparse.Namespace) -> int:
         url = args.daemon_url.rstrip("/") + "/events"
         debug_log(args, f"posting to {url}")
         try:
-            response = requests.post(url, json=payload, timeout=args.timeout)
+            response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
             debug_log(args, f"response: status={response.status_code}")
             if response.status_code != 200:
                 print(f"daemon rejected event: HTTP {response.status_code} {response.text[:250]}", file=sys.stderr)
@@ -391,7 +437,7 @@ def generate_report(args: argparse.Namespace) -> int:
         "save": not args.no_save,
     }
     try:
-        response = requests.post(url, json=payload, timeout=args.timeout)
+        response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
     except requests.RequestException as exc:
         print(f"failed to request report: {exc}", file=sys.stderr)
         return 1
@@ -445,7 +491,7 @@ def update_settings(args: argparse.Namespace) -> int:
     url = args.daemon_url.rstrip("/") + "/settings/ai"
     payload = {"enabled": args.ai == "on"}
     try:
-        response = requests.post(url, json=payload, timeout=args.timeout)
+        response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
     except requests.RequestException as exc:
         print(f"failed to update settings: {exc}", file=sys.stderr)
         return 1
@@ -462,7 +508,7 @@ def update_settings(args: argparse.Namespace) -> int:
 def check_status(args: argparse.Namespace) -> int:
     url = args.daemon_url.rstrip("/") + "/health"
     try:
-        response = requests.get(url, timeout=args.timeout)
+        response = requests.get(url, headers=get_request_headers(args), timeout=args.timeout)
     except requests.RequestException as exc:
         print(f"failed to check status: {exc}", file=sys.stderr)
         return 1
@@ -514,7 +560,7 @@ def run_backfill(args: argparse.Namespace) -> int:
     url = args.daemon_url.rstrip("/") + "/analyze/backfill"
     debug_log(args, f"requesting backfill at {url}")
     try:
-        response = requests.post(url, json={}, timeout=args.timeout)
+        response = requests.post(url, json={}, headers=get_request_headers(args), timeout=args.timeout)
     except requests.RequestException as exc:
         print(f"failed to request backfill: {exc}", file=sys.stderr)
         return 1

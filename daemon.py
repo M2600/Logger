@@ -2,19 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import json
 import queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from core_stream_engine import (
@@ -67,6 +69,42 @@ class RuntimeSettings:
     ollama_url: str
     timeout: float
     ai_enabled: bool
+
+
+@dataclass
+class AuthConfig:
+    """Global authentication configuration"""
+    api_key: Optional[str] = None
+    auth_enabled: bool = False
+    
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "AuthConfig":
+        """Load auth config from CLI args or config file"""
+        api_key = None
+        
+        # Priority: --api-key > --config-file
+        if args.api_key:
+            api_key = args.api_key
+        elif args.config_file:
+            api_key = cls._load_config_file(args.config_file)
+        
+        return cls(
+            api_key=api_key,
+            auth_enabled=api_key is not None
+        )
+    
+    @staticmethod
+    def _load_config_file(config_path: str) -> Optional[str]:
+        """Load API key from JSON config file"""
+        try:
+            path = Path(config_path).expanduser()
+            if path.exists():
+                with open(path) as f:
+                    data = json.load(f)
+                    return data.get("api_key")
+        except Exception:
+            pass
+        return None
 
 
 class DaemonState:
@@ -333,8 +371,35 @@ def build_warnings(state: DaemonState) -> list[dict[str, str]]:
     return warnings
 
 
-def build_app(state: DaemonState) -> FastAPI:
+def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
     app = FastAPI(title="Core-Stream Daemon", version="1.0.0")
+
+    # Add authentication middleware if enabled
+    if auth_config.auth_enabled:
+        class AuthMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                # Skip auth for public endpoints
+                if request.url.path in ["/", "/health", "/openapi.json", "/docs", "/redoc"]:
+                    return await call_next(request)
+                
+                # Extract Bearer token from Authorization header
+                auth_header = request.headers.get("Authorization", "")
+                if not auth_header.startswith("Bearer "):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "Missing or invalid Authorization header"}
+                    )
+                
+                token = auth_header[7:]  # Remove "Bearer " prefix
+                if token != auth_config.api_key:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Invalid API key"}
+                    )
+                
+                return await call_next(request)
+        
+        app.add_middleware(AuthMiddleware)
 
     @app.get("/")
     def index() -> FileResponse:
@@ -350,6 +415,7 @@ def build_app(state: DaemonState) -> FastAPI:
         analysis_state = build_analysis_state(state)
         return {
             "status": "ok",
+            "auth_enabled": auth_config.auth_enabled,
             "ai_enabled": state.settings.ai_enabled,
             "queue_size": analysis_state["queue_size"],
             "analysis_state": analysis_state,
@@ -455,7 +521,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Core-Stream daemon API server",
         epilog=(
             "endpoints: /health, /settings, /settings/ai, /events, /analyze/backfill, /reports/generate\n"
-            "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2"
+            "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2 --api-key my-secret-key"
         ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind address")
@@ -473,6 +539,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=120.0, help="Ollama HTTP timeout seconds")
     parser.add_argument("--ai-enabled", action="store_true", default=True, help="Enable AI worker (default)")
     parser.add_argument("--ai-disabled", dest="ai_enabled", action="store_false", help="Disable AI worker")
+    parser.add_argument("--api-key", type=str, default=None, help="Enable API key authentication (Bearer token)")
+    parser.add_argument("--config-file", type=str, default=None, help="Load API key from JSON config file")
     return parser.parse_args(argv[1:])
 
 
@@ -484,6 +552,7 @@ def main(argv: list[str]) -> int:
         timeout=args.timeout,
         ai_enabled=bool(args.ai_enabled),
     )
+    auth_config = AuthConfig.from_args(args)
     state = DaemonState(
         events_path=Path(args.events_path).expanduser(),
         classified_path=Path(args.classified_path).expanduser(),
@@ -507,7 +576,7 @@ def main(argv: list[str]) -> int:
     start_worker(state)
     start_retry_manager(state)
     state.resume_queued_on_startup = enqueue_unclassified_events(state)
-    app = build_app(state)
+    app = build_app(state, auth_config)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 

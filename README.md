@@ -12,6 +12,30 @@ python -m pip install -r requirements.txt
 Linux ではアクティブウィンドウ名取得に `xdotool` が必要です。  
 macOS は `osascript`、Windows は `pygetwindow` を利用します。
 
+## Configuration
+
+See [CONFIG.md](CONFIG.md) for detailed configuration guide.
+
+### Quick Start
+
+**Local (no auth):**
+```bash
+python daemon.py
+python log.py "my thought"
+```
+
+**Remote (with API key):**
+```bash
+python daemon.py --api-key "my-secret-key"
+python log.py --api-key "my-secret-key" "my thought"
+```
+
+Or use environment variable:
+```bash
+export LOGGER_API_KEY="my-secret-key"
+python log.py "my thought"
+```
+
 ## 1. Start daemon
 
 ```bash
@@ -76,3 +100,11 @@ python log.py settings --ai off
 - `POST /events`
 - `POST /analyze/backfill`
 - `POST /reports/generate`
+
+## Configuration Files
+
+Example config files for reference:
+- `daemon.config.example.json` - Daemon configuration template
+- `client.config.example.json` - Client configuration template
+
+For setup instructions, see [CONFIG.md](CONFIG.md).

@@ -1,0 +1,5 @@
+{
+  "api_key": "your-secret-key-here",
+  "port": 8765,
+  "ai_enabled": true
+}

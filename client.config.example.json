@@ -1,0 +1,4 @@
+{
+  "api_key": "your-secret-key-here",
+  "daemon_url": "http://localhost:8765"
+}

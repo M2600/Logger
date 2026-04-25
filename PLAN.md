@@ -112,7 +112,11 @@ HTTP POST /events（デーモンへ送信）
 - `--type TYPE`: イベント種別（デフォルト: thought）
 - `--daemon-url URL`: デーモン接続先（デフォルト: http://127.0.0.1:8765）
 - `--timeout SEC`: タイムアウト時間（デフォルト: 0.8秒）
-- `--debug`: デバッグログ出力（タイムスタンプ付き）
+- `--debug`: デバッグログ出力（タイムスタンプ付き stderr に記録）
+- `--async`: イベント送信をバックグラウンドスレッドで実行（デフォルト: 有効）
+  - スレッドは非デーモンモード（daemon=False）で実行
+  - thread.join(timeout=2.0) で送信完了を待つ
+  - → ユーザーへの制御復帰前に HTTP POST が完了することを保証
 
 **入力検証:**
 - 複数引数の空文字は自動フィルタ（`python log.py "" test ""`→ "test"）
@@ -120,11 +124,32 @@ HTTP POST /events（デーモンへ送信）
 - GUI/stdin/shortcut で空入力の場合はリクエスト送信しない
 - ユーザーのタイプミスやムダなリクエスト送信を防止
 
+**サブコマンド:**
+- `report [--period PERIOD] [--format FORMAT]`: レポート生成要求
+  - エラー時: daemon から返却された warning/hint を stderr に表示
+  - hint 表示時: `python log.py backfill` 実行の提案を追加表示
+- `next [--llm SETTING] [--format FORMAT]`: 未完了タスク表示
+- `status [--format FORMAT]`: daemon 健康状態 / 分析処理状態を表示
+  - Queue size / Analysis state / Last error などを可視化
+- `backfill`: 分類失敗・未分類イベントを再キューして再処理
+  - daemon の `/analyze/backfill` を呼び出し
+  - 手動トリガー版（自動は再起動時に実行）
+- `settings --ai {on|off}`: AI 処理のオン/オフ制御
+  - AI無効時: イベントは記録されるが分類は実行されない
+
 ---
 
 ### 2.2 Daemon / APIサーバー（FastAPI, `daemon.py`）
 
 **役割:** バックグラウンド常駐。データの確実な保存と重い処理のスケジューリングを担うハブ。
+
+**分類状態の管理:**
+- `events.jsonl`: 全イベントの生データ（source of truth）
+- `analysis_jobs.jsonl`: 各イベントの分析ジョブ履歴（status: pending/processing/done/failed）
+- `classified.jsonl`: 分類済みイベント（キャッシュ）
+  - **重要:** `classified.jsonl` は「最新ステータスが done のイベント」のみを保持
+  - 失敗・再試行時は古い分類結果は削除
+  - 起動時と backfill 時に jobs から再構築
 
 処理フロー:
 

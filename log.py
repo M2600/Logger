@@ -414,6 +414,7 @@ def generate_report(args: argparse.Namespace) -> int:
                 hint = detail.get("hint", "")
                 if hint:
                     print(f"\nHint: {hint}", file=sys.stderr)
+                    print(f"  → Try: python log.py backfill", file=sys.stderr)
                 failures = detail.get("recent_analysis_failures", [])
                 if failures:
                     print("\nRecent failures:", file=sys.stderr)

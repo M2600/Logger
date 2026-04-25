@@ -26,6 +26,7 @@ from core_stream_engine import (
     filter_period,
     load_jsonl,
     now_iso,
+    rebuild_classified_from_jobs,
     render_markdown,
     resolve_period,
     save_report_files,
@@ -335,6 +336,20 @@ def build_app(state: DaemonState) -> FastAPI:
 
     @app.post("/analyze/backfill")
     def analyze_backfill() -> dict[str, Any]:
+        # Rebuild classified.jsonl to remove stale entries from failed retries
+        rebuild_classified_from_jobs(
+            jobs_path=state.jobs_path,
+            events_path=state.events_path,
+            classified_path=state.classified_path,
+        )
+        # Reload classified_ids cache from rebuilt file
+        with state.lock:
+            state.classified_ids = {
+                str(item.get("record_id", "")).strip()
+                for item in load_jsonl(state.classified_path)
+                if str(item.get("record_id", "")).strip()
+            }
+        # Queue remaining unclassified events
         queued = enqueue_unclassified_events(state)
         return {"queued": queued, "warnings": build_warnings(state)}
 
@@ -421,6 +436,19 @@ def main(argv: list[str]) -> int:
         reports_dir=Path(args.reports_dir).expanduser(),
         settings=settings,
     )
+    # On startup, rebuild classified.jsonl to remove stale entries from failed retries
+    rebuild_classified_from_jobs(
+        jobs_path=state.jobs_path,
+        events_path=state.events_path,
+        classified_path=state.classified_path,
+    )
+    # Reload classified_ids cache from rebuilt file
+    with state.lock:
+        state.classified_ids = {
+            str(item.get("record_id", "")).strip()
+            for item in load_jsonl(state.classified_path)
+            if str(item.get("record_id", "")).strip()
+        }
     start_worker(state)
     state.resume_queued_on_startup = enqueue_unclassified_events(state)
     app = build_app(state)

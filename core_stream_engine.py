@@ -48,6 +48,53 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def rebuild_classified_from_jobs(
+    jobs_path: Path,
+    events_path: Path,
+    classified_path: Path,
+) -> None:
+    """Rebuild classified.jsonl from jobs and events, keeping only successful classifications.
+    
+    For each event, find the latest job status:
+    - If "done": look for corresponding classified entry and preserve it
+    - If "failed" or "pending" or "processing": skip (not yet classified)
+    
+    This ensures classified.jsonl never contains stale results from failed retries.
+    """
+    jobs = load_jsonl(jobs_path)
+    events = load_jsonl(events_path)
+    
+    # Build event map: event_id -> event
+    event_map = {e.get("id"): e for e in events if e.get("id")}
+    
+    # Find latest job status for each event
+    latest_status: dict[str, str] = {}
+    for job in jobs:
+        event_id = str(job.get("event_id", "")).strip()
+        if event_id:
+            latest_status[event_id] = job.get("status", "")
+    
+    # Load current classified entries
+    classified_rows = load_jsonl(classified_path)
+    classified_map = {
+        c.get("event_id"): c
+        for c in classified_rows
+        if c.get("event_id")
+    }
+    
+    # Rebuild: keep only entries where latest status is "done"
+    valid_entries = []
+    for event_id, status in latest_status.items():
+        if status == "done" and event_id in classified_map:
+            valid_entries.append(classified_map[event_id])
+    
+    # Rewrite classified.jsonl with only valid entries
+    classified_path.parent.mkdir(parents=True, exist_ok=True)
+    with classified_path.open("w", encoding="utf-8") as f:
+        for entry in valid_entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []

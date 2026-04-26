@@ -318,7 +318,7 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
     parser.add_argument("--to-date", help="Range end date (YYYY-MM-DD, inclusive)")
     parser.add_argument("--llm", choices=["never", "auto", "always"], default="auto", help="Report LLM strategy")
     parser.add_argument("--llm-threshold", type=int, default=60, help="Use LLM in auto when entries >= N")
-    parser.add_argument("--format", choices=["md", "json", "both"], default="both", help="Client output format")
+    parser.add_argument("--format", choices=["md", "json", "both"], default="md", help="Client output format")
     parser.add_argument("--no-save", action="store_true", help="Do not save report files on daemon")
     args = parser.parse_args(argv[1:])
     args.mode = mode

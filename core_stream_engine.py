@@ -136,6 +136,29 @@ def remove_browser_suffix(title: str) -> str:
     return value
 
 
+def get_known_projects(classified_path: Path = DEFAULT_CLASSIFIED_PATH) -> list[str]:
+    """Extract unique project names from classified.jsonl"""
+    if not classified_path.exists():
+        return []
+    
+    projects = set()
+    try:
+        for line in classified_path.read_text(encoding="utf-8").strip().split("\n"):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                project = str(record.get("project", "")).strip()
+                if project and project.lower() not in ("unknown", "null"):
+                    projects.add(project)
+            except json.JSONDecodeError:
+                continue
+    except (IOError, OSError):
+        pass
+    
+    return sorted(projects)
+
+
 def normalize_project_key(event: dict[str, Any]) -> str:
     ctx = event.get("context") if isinstance(event.get("context"), dict) else {}
     meta = event.get("meta") if isinstance(event.get("meta"), dict) else {}
@@ -201,9 +224,16 @@ def parse_classification_json(text: str) -> dict[str, Any]:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        return {"summary": cleaned, "done": [], "todos": [], "tags": []}
+        return {"project": None, "summary": cleaned, "done": [], "todos": [], "tags": []}
     if not isinstance(data, dict):
-        return {"summary": cleaned, "done": [], "todos": [], "tags": []}
+        return {"project": None, "summary": cleaned, "done": [], "todos": [], "tags": []}
+    
+    project = data.get("project")
+    if project is not None:
+        project = str(project).strip() if project else None
+        if project and project.lower() in ("null", "none", "unknown"):
+            project = None
+    
     summary = str(data.get("summary", "")).strip()
     done = [str(item).strip() for item in data.get("done", []) if str(item).strip()]
     tags = [str(item).strip() for item in data.get("tags", []) if str(item).strip()]
@@ -226,20 +256,21 @@ def parse_classification_json(text: str) -> dict[str, Any]:
         task = str(item).strip()
         if task:
             todos.append({"task": task})
-    return {"summary": summary, "done": done, "todos": todos, "tags": tags}
+    return {"project": project, "summary": summary, "done": done, "todos": todos, "tags": tags}
 
 
-def build_classify_prompt(event: dict[str, Any], project: str) -> str:
+def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> str:
     ctx = event.get("context") if isinstance(event.get("context"), dict) else {}
     source = event.get("source", "")
+    
     schema = (
-        '{"summary":"...",'
+        '{"project":null or "project-name",'
+        '"summary":"...",'
         '"done":["..."],'
         '"todos":[{"task":"...","priority":1,"context":"..."}],'
         '"tags":["..."]}'
     )
     
-    # For GUI input, prioritize window context over directory
     priority_notice = ""
     if source == "gui":
         priority_notice = (
@@ -247,10 +278,14 @@ def build_classify_prompt(event: dict[str, Any], project: str) -> str:
             "Prioritize window/page_title context over cwd for project/task identification. ***"
         )
     
+    known_list = ", ".join(f'"{p}"' for p in known_projects) if known_projects else "none"
+    
     return (
         "Classify this single development log into factual progress and actionable todos. "
         "Ignore emotional noise and return strict JSON only.\n"
-        f"Project: {project}\n"
+        f"Known projects: [{known_list}]\n"
+        f"Infer project from context: use git repo name if available, window/page_title if no git context, "
+        f"match known projects if possible, null if unclear (e.g., home directory or /tmp).\n"
         f"Expected JSON schema: {schema}\n"
         f"t: {event.get('created_at', 'unknown')}\n"
         f"body: {event.get('body', '')}\n"
@@ -281,11 +316,18 @@ def classify_event(
     model: str,
     ollama_url: str,
     timeout: float,
+    classified_path: Path = DEFAULT_CLASSIFIED_PATH,
 ) -> dict[str, Any]:
-    project = normalize_project_key(event)
-    prompt = build_classify_prompt(event, project)
+    known_projects = get_known_projects(classified_path)
+    prompt = build_classify_prompt(event, known_projects)
     response_text = call_ollama(url=ollama_url, model=model, prompt=prompt, timeout=timeout)
     classification = parse_classification_json(response_text)
+    
+    # Use project from LLM classification, fallback to normalize_project_key if null
+    project = classification.get("project")
+    if not project:
+        project = normalize_project_key(event)
+    
     return {
         "record_id": event_fingerprint(event),
         "event_id": event.get("id", ""),

@@ -117,6 +117,26 @@ def infer_project_hint(cwd: str, window_title: str) -> str:
     return "unknown"
 
 
+def get_git_repo_name(cwd: str) -> str:
+    """Extract git repository name from current directory or parent directories."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2
+        )
+        if result.returncode == 0:
+            git_root = result.stdout.strip()
+            if git_root:
+                return Path(git_root).name.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 def get_gui_input() -> str:
     import tkinter as tk
 
@@ -547,7 +567,9 @@ def post_event(args: argparse.Namespace) -> int:
             debug_log(args, "process_event: collecting context")
             window_title = get_active_window_title()
             page_title = extract_page_title(window_title)
-            debug_log(args, f"window_title={window_title}")
+            cwd = os.getcwd()
+            git_repo = get_git_repo_name(cwd)
+            debug_log(args, f"window_title={window_title}, git_repo={git_repo}")
             
             screenshot_data = ""
             shot_error = ""
@@ -567,7 +589,8 @@ def post_event(args: argparse.Namespace) -> int:
                 "source": source,
                 "created_at": datetime.now().astimezone().isoformat(),
                 "context": {
-                    "cwd": os.getcwd(),
+                    "cwd": cwd,
+                    "git_repo": git_repo,
                     "win": window_title or "unknown",
                     "host": socket.gethostname(),
                     "is_browser": is_browser_window(window_title),

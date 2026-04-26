@@ -261,7 +261,6 @@ def parse_classification_json(text: str) -> dict[str, Any]:
 
 def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> str:
     ctx = event.get("context") if isinstance(event.get("context"), dict) else {}
-    source = event.get("source", "")
     
     schema = (
         '{"project":null or "project-name",'
@@ -271,29 +270,25 @@ def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> s
         '"tags":["..."]}'
     )
     
-    priority_notice = ""
-    if source == "gui":
-        priority_notice = (
-            "\n*** CONTEXT PRIORITY: This was logged from GUI input. "
-            "Prioritize window/page_title context over cwd for project/task identification. ***"
-        )
-    
     known_list = ", ".join(f'"{p}"' for p in known_projects) if known_projects else "none"
     
     return (
-        "Classify this single development log into factual progress and actionable todos. "
-        "Ignore emotional noise and return strict JSON only.\n"
+        "Classify this development log into progress and actionable todos.\n"
+        "Infer the project PRIMARILY from the log body content itself.\n"
+        "Use context information (git_repo, window, page_title, cwd) as supplementary hints only.\n"
+        "Git repository name is the most reliable context signal when available.\n"
+        "Return null for project only if genuinely unclear from all available information.\n\n"
         f"Known projects: [{known_list}]\n"
-        f"Infer project from context: use git repo name if available, window/page_title if no git context, "
-        f"match known projects if possible, null if unclear (e.g., home directory or /tmp).\n"
-        f"Expected JSON schema: {schema}\n"
-        f"t: {event.get('created_at', 'unknown')}\n"
-        f"body: {event.get('body', '')}\n"
-        f"cwd: {ctx.get('cwd', 'unknown')}\n"
-        f"page_title: {ctx.get('page_title', 'unknown')}\n"
-        f"win: {ctx.get('win', 'unknown')}\n"
-        f"{priority_notice}"
+        f"Expected JSON schema: {schema}\n\n"
+        f"Log details:\n"
+        f"  body: {event.get('body', '')}\n"
+        f"  git_repo: {ctx.get('git_repo', 'unknown')}\n"
+        f"  window: {ctx.get('win', 'unknown')}\n"
+        f"  page_title: {ctx.get('page_title', 'unknown')}\n"
+        f"  cwd: {ctx.get('cwd', 'unknown')}\n\n"
+        "Return strict JSON only."
     )
+
 
 
 def event_fingerprint(event: dict[str, Any]) -> str:

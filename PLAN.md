@@ -140,6 +140,12 @@ HTTP POST /events（デーモンへ送信）
   - 手動トリガー版（自動は再起動時に実行）
 - `settings --ai {on|off}`: AI 処理のオン/オフ制御
   - AI無効時: イベントは記録されるが分類は実行されない
+- `retry-send`: 未送信イベントを再送信
+
+**サブコマンドとグローバルオプションの順序:**
+- グローバルオプション（`--daemon-url`, `--api-key` など）はサブコマンドの前後どちらでも指定可能
+- 例: `python log.py --daemon-url http://localhost:8765 status` または `python log.py status --daemon-url http://localhost:8765`
+- 内部的にサブコマンドを検出してから引数をパースするため、順序に依存しない
 
 ---
 

@@ -320,7 +320,7 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
     parser.add_argument("--llm-threshold", type=int, default=60, help="Use LLM in auto when entries >= N")
     parser.add_argument("--format", choices=["md", "json", "both"], default="both", help="Client output format")
     parser.add_argument("--no-save", action="store_true", help="Do not save report files on daemon")
-    args = parser.parse_args(argv[2:])
+    args = parser.parse_args(argv[1:])
     args.mode = mode
     
     # Priority: CLI arg > config file > default
@@ -347,7 +347,7 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
     parser.add_argument("--timeout", type=float, default=None, help="POST /settings/ai timeout seconds")
     parser.add_argument("--ai", choices=["on", "off"], required=True, help="Enable/disable daemon AI worker")
-    args = parser.parse_args(argv[2:])
+    args = parser.parse_args(argv[1:])
     
     # Priority: CLI arg > config file > default
     if args.config_file:
@@ -373,7 +373,7 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
     parser.add_argument("--timeout", type=float, default=None, help="GET /health timeout seconds")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
-    args = parser.parse_args(argv[2:])
+    args = parser.parse_args(argv[1:])
     
     # Priority: CLI arg > config file > default
     if args.config_file:
@@ -398,7 +398,7 @@ def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
     parser.add_argument("--timeout", type=float, default=None, help="POST /analyze/backfill timeout seconds")
-    args = parser.parse_args(argv[2:])
+    args = parser.parse_args(argv[1:])
     
     # Priority: CLI arg > config file > default
     if args.config_file:
@@ -900,7 +900,7 @@ def parse_retry_send_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
     parser.add_argument("--timeout", type=float, default=None, help="POST timeout seconds")
     
-    args = parser.parse_args(argv[2:])
+    args = parser.parse_args(argv[1:])
     
     # Priority: CLI arg > config file > default
     if args.config_file:
@@ -916,6 +916,24 @@ def parse_retry_send_args(argv: list[str]) -> argparse.Namespace:
         args.timeout = config_data.get('timeout', 30.0)
     
     return args
+
+
+def _find_subcommand(argv: list[str]) -> str | None:
+    """Find subcommand in argv at any position."""
+    subcommands = {"report", "next", "settings", "status", "backfill", "retry-send"}
+    for arg in argv[1:]:
+        if arg in subcommands:
+            return arg
+    return None
+
+
+def _remove_subcommand(argv: list[str], subcommand: str) -> list[str]:
+    """Remove subcommand from argv and return cleaned list."""
+    result = [argv[0]]
+    for arg in argv[1:]:
+        if arg != subcommand:
+            result.append(arg)
+    return result
 
 
 def main(argv: list[str]) -> int:
@@ -935,19 +953,22 @@ def main(argv: list[str]) -> int:
             )
             return 0
     
-    if len(argv) > 1 and argv[1] == "report":
-        return generate_report(parse_report_args(argv, mode="report"))
-    if len(argv) > 1 and argv[1] == "next":
-        return generate_report(parse_report_args(argv, mode="todo"))
-    if len(argv) > 1 and argv[1] == "settings":
-        return update_settings(parse_settings_args(argv))
-    if len(argv) > 1 and argv[1] == "status":
-        return check_status(parse_status_args(argv))
-    if len(argv) > 1 and argv[1] == "backfill":
-        return run_backfill(parse_backfill_args(argv))
-    if len(argv) > 1 and argv[1] == "retry-send":
-        return run_retry_send(parse_retry_send_args(argv))
-    return post_event(parse_log_args(argv))
+    subcommand = _find_subcommand(argv)
+    cleaned_argv = _remove_subcommand(argv, subcommand) if subcommand else argv
+    
+    if subcommand == "report":
+        return generate_report(parse_report_args(cleaned_argv, mode="report"))
+    if subcommand == "next":
+        return generate_report(parse_report_args(cleaned_argv, mode="todo"))
+    if subcommand == "settings":
+        return update_settings(parse_settings_args(cleaned_argv))
+    if subcommand == "status":
+        return check_status(parse_status_args(cleaned_argv))
+    if subcommand == "backfill":
+        return run_backfill(parse_backfill_args(cleaned_argv))
+    if subcommand == "retry-send":
+        return run_retry_send(parse_retry_send_args(cleaned_argv))
+    return post_event(parse_log_args(cleaned_argv))
 
 
 if __name__ == "__main__":

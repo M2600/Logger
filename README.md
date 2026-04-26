@@ -115,7 +115,21 @@ python log.py settings --ai on
 python log.py settings --ai off
 ```
 
-## HTTP endpoints (daemon)
+## 5. Subcommand & Global Options
+
+Subcommands (`status`, `report`, `next`, `settings`, `backfill`, `retry-send`) can appear anywhere in the command line. Global options (`--daemon-url`, `--api-key`, etc.) can come before or after the subcommand:
+
+```bash
+# Both forms are equivalent
+python log.py --daemon-url http://localhost:8765 status
+python log.py status --daemon-url http://localhost:8765
+
+# Mixed with other options
+python log.py --daemon-url http://localhost:8765 report --period week
+python log.py report --period week --daemon-url http://localhost:8765
+```
+
+## 6. HTTP endpoints (daemon)
 
 - `GET /health`
 - `GET /settings`
@@ -124,7 +138,7 @@ python log.py settings --ai off
 - `POST /analyze/backfill`
 - `POST /reports/generate`
 
-## Configuration Files
+## 7. Configuration Files
 
 Example config files for reference:
 - `daemon.config.example.json` - Daemon configuration template

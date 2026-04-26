@@ -459,6 +459,19 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
     )
 
 
+def is_placeholder(item: Any) -> bool:
+    """Check if item is a placeholder value (none, None, etc.)"""
+    if not isinstance(item, str):
+        return False
+    normalized = str(item).strip().lower()
+    return normalized in ("none", "null", "undefined", "n/a", "...")
+
+
+def filter_placeholders(items: list[Any]) -> list[Any]:
+    """Remove placeholder values from list"""
+    return [item for item in items if not is_placeholder(item)]
+
+
 def parse_report_json(mode: str, text: str) -> dict[str, Any]:
     cleaned = strip_code_fence(text)
     try:
@@ -468,11 +481,16 @@ def parse_report_json(mode: str, text: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {"todos": []} if mode == "todo" else {"done": [], "next_actions": [], "risks": []}
     if mode == "todo":
-        return {"todos": data.get("todos")} if isinstance(data.get("todos"), list) else {"todos": []}
+        todos = data.get("todos") if isinstance(data.get("todos"), list) else []
+        return {"todos": filter_placeholders(todos)}
     done = data.get("done") if isinstance(data.get("done"), list) else []
     next_actions = data.get("next_actions") if isinstance(data.get("next_actions"), list) else []
     risks = data.get("risks") if isinstance(data.get("risks"), list) else []
-    return {"done": done, "next_actions": next_actions, "risks": risks}
+    return {
+        "done": filter_placeholders(done),
+        "next_actions": filter_placeholders(next_actions),
+        "risks": filter_placeholders(risks)
+    }
 
 
 def build_report_payload(

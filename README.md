@@ -12,6 +12,26 @@ python -m pip install -r requirements.txt
 Linux ではアクティブウィンドウ名取得に `xdotool` が必要です。  
 macOS は `osascript`、Windows は `pygetwindow` を利用します。
 
+### Ollama Setup
+
+This logger uses **Ollama** for local LLM-based event classification and analysis. Ollama must be running before the daemon can perform AI operations.
+
+**Install Ollama:**
+- Download and install from https://ollama.ai
+
+**Start Ollama (in another terminal):**
+```bash
+ollama serve
+```
+
+**Pull a model (e.g., gemma2):**
+```bash
+ollama pull gemma2
+```
+
+Available models: `gemma2`, `mistral`, `neural-chat`, `llama2`, etc.  
+Daemon auto-downloads the specified model on first run.
+
 ## Configuration
 
 See [CONFIG.md](CONFIG.md) for detailed configuration guide.

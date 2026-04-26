@@ -617,3 +617,72 @@ Secure Network Deployment (optional API key)
 
 **入力はfrictionless、整理はAI自動化、展開は安全。**
 思考を止めない、ただそれだけのために設計されたシステム。
+
+---
+
+## 16. 将来の拡張案（Phase 2+）
+
+### Vision-Language Model Agent 設計
+
+**背景:**
+スクリーンショットは現在 Base64 エンコードで保存されているが、未活用。VL(Vision-Language)モデルで画像を解析すると、テキスト情報が不足している場合に強力になる可能性がある。
+
+**ハードウェア制約（RTX3060 12GB 想定）:**
+- テキストモデル (gemma2:7b, qwen2.5:7b 等): 常時常駐可能 (~7-8GB)
+- VLモデル (llava:13b 等): 常時常駐はメモリ逼迫 (~11-12GB)
+- 両方の同時常駐は不可能
+
+**提案設計: エージェント + ツール呼び出し**
+
+1. **通常フロー:**
+   ```
+   Event (body + context) → テキストモデル分類
+   ```
+
+2. **フォールバックフロー (条件付き):**
+   ```
+   テキスト分類時に以下を判定:
+   - body が曖昧 (例: "これどうすればいいんだ")
+   - かつ context が薄い (git_repo = unknown, win = unknown)
+   
+   → LLM が "context_insufficient" ツールを呼び出し
+   → スクリーンショット + body → VLモデル解析
+   → 補足コンテキストを取得 → テキストモデルが再分類
+   ```
+
+3. **ツール定義:**
+   ```json
+   {
+     "type": "function",
+     "function": {
+       "name": "analyze_screenshot",
+       "description": "画像を解析してプロジェクト・タスクを判定する（body が曖昧で context が不足している場合のみ呼び出す）",
+       "parameters": {
+         "type": "object",
+         "properties": {
+           "reason": {
+             "type": "string",
+             "description": "なぜ画像解析が必要なのか"
+           }
+         },
+         "required": ["reason"]
+       }
+     }
+   }
+   ```
+
+**実装手順:**
+- Phase 2a: Ollama のツール呼び出し機能を実装
+- Phase 2b: VLモデル統合 (初回ロード・キャッシュ戦略含む)
+- Phase 2c: スワップ頻度の測定・最適化
+
+**期待される効果:**
+- 画像解析は本当に必要な時だけ → GPU メモリ・レイテンシの節約
+- LLM 自身が判断 → ルールベースより柔軟
+- モデルスワップは 1 日数十回程度 → ハード寿命への影響無視できる
+
+**懸念事項:**
+- スワップ頻度が予想より高い場合 → VL モデル統一に切り替える検討
+- Ollama のツール呼び出し API の仕様確認が必要
+- VL モデルの精度検証 (実装時)
+

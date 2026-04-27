@@ -19,7 +19,9 @@ install() {
 	"$WORKING_DIR/$VENV_DIR/bin/pip" install -r "$WORKING_DIR/requirements.txt"
 }
 
-
+if [ -f "$WORKING_DIR/$VENV_DIR/bin/python" ];then
+	install
+fi
 
 export DISPLAY=:0
 

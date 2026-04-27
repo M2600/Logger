@@ -1214,10 +1214,10 @@ def mark_task_complete(args: argparse.Namespace) -> int:
     try:
         response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
     except requests.RequestException as exc:
-        print(f"failed to mark task complete: {exc}", file=sys.stderr)
+        print(f"タスク完了に失敗: {exc}", file=sys.stderr)
         return 1
     if response.status_code != 200:
-        print(f"daemon error: HTTP {response.status_code}", file=sys.stderr)
+        print(f"デーモンエラー: HTTP {response.status_code}", file=sys.stderr)
         try:
             print(f"  {response.json()}", file=sys.stderr)
         except ValueError:
@@ -1226,7 +1226,7 @@ def mark_task_complete(args: argparse.Namespace) -> int:
     
     data = response.json()
     task = data.get("task", {})
-    print(f"✓ Task marked as complete: {task.get('task_text', args.task_id)}", file=sys.stderr)
+    print(f"✓ タスク完了: {task.get('task_text', args.task_id)}", file=sys.stderr)
     print_warnings(data)
     return 0
 

@@ -250,20 +250,24 @@ class DaemonState:
             return []
         
         # Build task list for LLM
-        task_list = "\n".join([f"- {t.task_text}" for t in open_tasks.values()])
+        task_list = "\n".join([f"{i}. {t.task_text}" for i, t in enumerate(open_tasks.values())])
         
         # Create prompt for LLM to check if any tasks are completed
+        # Use English for better model consistency, then parse JSON
         prompt = (
             "I have the following list of open tasks:\n"
             f"{task_list}\n\n"
             "A new event just occurred:\n"
             f'"{event_body}"\n\n'
             "Analyze this new event and determine which (if any) of the open tasks have been completed or resolved by this event.\n"
-            "Return a JSON response with the following format:\n"
-            '{"completed_task_indices": [0, 2], "confidence": 0.95, "notes": "Brief explanation"}\n'
-            "Only include task indices where you have HIGH confidence (>0.8) that the task is actually completed.\n"
-            "If no tasks appear to be completed, return an empty array.\n"
-            "Return ONLY valid JSON, no other text."
+            "Return ONLY a valid JSON response (no markdown, no code blocks) with this exact format:\n"
+            '{"completed_task_indices": [0, 2], "confidence": 0.95, "reason": "Brief explanation in English"}\n'
+            "Guidelines:\n"
+            "- completed_task_indices: array of indices (0-based) of completed tasks, or empty array if none\n"
+            "- confidence: float between 0 and 1 representing your confidence level\n"
+            "- reason: brief explanation of why these tasks are marked complete\n"
+            "- Only include task indices where you have HIGH confidence (>0.8) that the task is actually completed.\n"
+            "- Return ONLY the JSON object, no additional text, no code blocks, no markdown."
         )
         
         try:
@@ -274,12 +278,16 @@ class DaemonState:
                 timeout=self.settings.timeout,
             )
             if response.status_code != 200:
+                print(f"[DEBUG] Ollama API error: {response.status_code}")
                 return []
             
             result = response.json()
             response_text = str(result.get("response", "")).strip()
+            
+            # Clean up response - remove markdown code blocks if present
             if response_text.startswith("```"):
                 response_text = response_text.strip()
+                # Remove ```json or ``` prefix and ``` suffix
                 response_text = response_text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             
             # Parse JSON response
@@ -287,25 +295,37 @@ class DaemonState:
             try:
                 parsed = json_lib.loads(response_text)
                 completed_indices = parsed.get("completed_task_indices", [])
+                confidence = parsed.get("confidence", 0.0)
+                reason = parsed.get("reason", "")
+                
+                # Only process if confidence is high enough
+                if not isinstance(completed_indices, list):
+                    return []
                 
                 task_list_items = list(open_tasks.items())
                 completed_ids = []
                 for idx in completed_indices:
                     if isinstance(idx, int) and 0 <= idx < len(task_list_items):
-                        task_id, task = task_list_items[idx]
-                        self.update_task(
-                            task_id=task_id,
-                            status="completed",
-                            completed_at=now_iso(),
-                            completed_event_id=event.get("id", ""),
-                            note=parsed.get("notes", ""),
-                            completion_reason="auto",
-                        )
-                        completed_ids.append(task_id)
+                        if confidence > 0.8:
+                            task_id, task = task_list_items[idx]
+                            self.update_task(
+                                task_id=task_id,
+                                status="completed",
+                                completed_at=now_iso(),
+                                completed_event_id=event.get("id", ""),
+                                note=reason,
+                                completion_reason="auto",
+                            )
+                            completed_ids.append(task_id)
+                
+                if completed_ids:
+                    print(f"[AUTO-COMPLETE] Marked {len(completed_ids)} task(s) as completed: {completed_ids}")
                 return completed_ids
-            except (json_lib.JSONDecodeError, ValueError, TypeError):
+            except (json_lib.JSONDecodeError, ValueError, TypeError) as e:
+                print(f"[DEBUG] JSON parse error: {e}, response_text: {response_text[:200]}")
                 return []
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Auto-complete error: {e}")
             return []
 
 def start_worker(state: DaemonState) -> threading.Thread:

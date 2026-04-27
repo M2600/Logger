@@ -445,6 +445,7 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
         schema = '{"todos":[{"task":"...","priority":1,"context":"..."}]}'
         return (
             "Refine this pre-aggregated todo list into a concise, deduplicated actionable list. "
+            "Answer in Japanese."
             "Return strict JSON only.\n"
             f"Project: {project}\n"
             f"Expected JSON schema: {schema}\n"
@@ -453,6 +454,7 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
     schema = '{"done":["..."],"next_actions":["..."],"risks":["..."]}'
     return (
         "Refine this pre-aggregated progress summary into clean professional status bullets. "
+        "Answer in Japanese. "
         "Return strict JSON only.\n"
         f"Project: {project}\n"
         f"Expected JSON schema: {schema}\n"

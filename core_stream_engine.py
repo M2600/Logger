@@ -236,7 +236,7 @@ def parse_classification_json(text: str) -> dict[str, Any]:
             project = None
     
     summary = str(data.get("summary", "")).strip()
-    done = [str(item).strip() for item in data.get("done", []) if str(item).strip()]
+    done = [str(item).strip() for item in data.get("done", []) if str(item).strip() and not is_placeholder(str(item).strip())]
     tags = [str(item).strip() for item in data.get("tags", []) if str(item).strip()]
     todos_raw = data.get("todos") if isinstance(data.get("todos"), list) else []
     todos: list[dict[str, Any]] = []
@@ -260,9 +260,56 @@ def parse_classification_json(text: str) -> dict[str, Any]:
     return {"project": project, "summary": summary, "done": done, "todos": todos, "tags": tags}
 
 
-def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> str:
+RECENT_CONTEXT_MAX_EVENTS = 8
+RECENT_CONTEXT_MAX_HOURS = 3.0
+
+
+def _fmt_time_short(dt: datetime) -> str:
+    return dt.astimezone().strftime("%H:%M")
+
+
+def get_recent_context(
+    events_path: Path,
+    classified_path: Path,
+    before_time: datetime,
+    max_count: int = RECENT_CONTEXT_MAX_EVENTS,
+    max_hours: float = RECENT_CONTEXT_MAX_HOURS,
+) -> list[dict[str, Any]]:
+    """Return recent events (before_time, within max_hours) condensed for LLM context."""
+    cutoff = before_time.astimezone(timezone.utc) - timedelta(hours=max_hours)
+    before_utc = before_time.astimezone(timezone.utc)
+
+    classified_map: dict[str, dict[str, Any]] = {}
+    for row in load_jsonl(classified_path):
+        eid = str(row.get("event_id", "")).strip()
+        if eid:
+            classified_map[eid] = row
+
+    result: list[dict[str, Any]] = []
+    for ev in load_jsonl(events_path):
+        ts = parse_timestamp(ev.get("created_at"))
+        if ts is None or ts < cutoff or ts >= before_utc:
+            continue
+        classified = classified_map.get(str(ev.get("id", "")))
+        cls = classified.get("classification", {}) if classified else {}
+        result.append({
+            "created_at": _fmt_time_short(ts),
+            "body": str(ev.get("body", ""))[:100],
+            "project": str(classified.get("project", "?")) if classified else "?",
+            "summary": str(cls.get("summary", ""))[:80] if cls else "",
+        })
+
+    return result[-max_count:]
+
+
+def build_classify_prompt(
+    event: dict[str, Any],
+    known_projects: list[str],
+    recent_context: list[dict[str, Any]] | None = None,
+) -> str:
     ctx = event.get("context") if isinstance(event.get("context"), dict) else {}
-    
+    source = str(event.get("source", "cli")).strip().lower()
+
     schema = (
         '{"project":null or "project-name",'
         '"summary":"...",'
@@ -270,30 +317,117 @@ def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> s
         '"todos":[{"task":"...","priority":1,"context":"..."}],'
         '"tags":["..."]}'
     )
-    
     known_list = ", ".join(f'"{p}"' for p in known_projects) if known_projects else "none"
-    
-    return (
-        "Classify this development log into progress and actionable todos.\n"
-        "Infer the project PRIMARILY from the log body content itself.\n"
-        "Use context information (git_repo, window, page_title, cwd) as supplementary hints only.\n"
-        "Git repository name is the most reliable context signal when available.\n"
-        "Return null for project only if genuinely unclear from all available information.\n\n"
-        "Language rules:\n"
-        "- Write summary/done/todos/context in natural Japanese.\n"
-        "- Keep tags machine-oriented and compact (no need to force Japanese translation).\n"
-        "- Keep JSON keys and schema exactly as specified.\n\n"
-        f"Known projects: [{known_list}]\n"
-        f"Expected JSON schema: {schema}\n\n"
-        f"Log details:\n"
-        f"  body: {event.get('body', '')}\n"
-        f"  git_repo: {ctx.get('git_repo', 'unknown')}\n"
-        f"  window: {ctx.get('win', 'unknown')}\n"
-        f"  page_title: {ctx.get('page_title', 'unknown')}\n"
-        f"  cwd: {ctx.get('cwd', 'unknown')}\n\n"
-        "Return strict JSON only."
-    )
 
+    lines: list[str] = [
+        "Classify this development log entry into project, progress, and actionable todos.",
+        "",
+    ]
+
+    # Recent activity for session continuity
+    if recent_context:
+        lines.append("## Recent Activity (use for session context)")
+        for item in recent_context:
+            project_label = f"[{item['project']}] " if item["project"] != "?" else ""
+            summary_part = f" — {item['summary']}" if item["summary"] else ""
+            lines.append(f"  {item['created_at']}: \"{item['body']}\"{' → ' + project_label + summary_part if project_label or summary_part else ''}")
+        lines.append("")
+
+    # Source-specific guidance on which context signals to trust
+    if source == "gui":
+        lines += [
+            "## Input Mode: GUI",
+            "Triggered via keyboard shortcut / GUI launcher.",
+            "Signal reliability: git_repo (high) > active_window / page_title (high) > cwd (NOT reliable — ignore)",
+            "",
+        ]
+    elif source == "stdin":
+        lines += [
+            "## Input Mode: stdin pipe",
+            "Content piped in (e.g. git diff | log.py).",
+            "Signal reliability: git_repo (high) > cwd (high) > active_window (low)",
+            "",
+        ]
+    elif source == "git":
+        lines += [
+            "## Input Mode: git hook",
+            "Auto-generated by a git commit hook.",
+            "Signal reliability: git_repo / branch / commit (authoritative)",
+            "",
+        ]
+    else:
+        lines += [
+            "## Input Mode: CLI",
+            "Typed directly in terminal.",
+            "Signal reliability: git_repo (high) > cwd (high) > active_window (medium)",
+            "",
+        ]
+
+    lines += [
+        "## Log Entry",
+        f"body: {event.get('body', '')}",
+        "",
+        "## Context Signals",
+    ]
+
+    git_repo = ctx.get("git_repo", "unknown")
+    if git_repo and git_repo != "unknown":
+        lines.append(f"  git_repo: {git_repo}  [most reliable]")
+
+    if source != "gui":
+        cwd = ctx.get("cwd", "unknown")
+        if cwd and cwd != "unknown":
+            lines.append(f"  cwd: {cwd}")
+
+    win = ctx.get("win", "unknown")
+    if win and win != "unknown":
+        reliability = "reliable in GUI mode" if source == "gui" else ""
+        suffix = f"  [{reliability}]" if reliability else ""
+        lines.append(f"  active_window: {win}{suffix}")
+
+    page_title = ctx.get("page_title", "unknown")
+    if page_title and page_title != "unknown":
+        reliability = "reliable in GUI mode" if source == "gui" else ""
+        suffix = f"  [{reliability}]" if reliability else ""
+        lines.append(f"  page_title: {page_title}{suffix}")
+
+    lines += [
+        "",
+        "## Project Resolution — follow this priority order strictly",
+        "",
+        "1. BODY (highest priority)",
+        "   The user's own words are the ground truth.",
+        "   - Explicit project name in body (e.g. 'project2について', 'Logger のバグ')",
+        "     → use that project. IGNORE git_repo/cwd even if they differ.",
+        "   - Body clearly describes work that belongs to a specific project",
+        "     → use that project.",
+        "",
+        "2. RECENT ACTIVITY (second priority)",
+        "   If body does not explicitly name a project:",
+        "   - If recent entries are consistently one project AND body is clearly a continuation",
+        "     (same topic, follow-up, or references like 'さっきの' / 'これ' / 'また同じ')",
+        "     → use that project.",
+        "",
+        "3. CONTEXT SIGNALS (tiebreaker only)",
+        "   Use git_repo / cwd / window ONLY when body AND recent activity",
+        "   leave the project genuinely ambiguous.",
+        "   These signals show where the user IS — not necessarily what they are thinking about.",
+        "",
+        "Decision examples:",
+        "  body: 'project2のバグを修正した' + git_repo: project1  →  project2  (body wins)",
+        "  body: 'さっきの問題が再現した' + recent: [project2, project2]  →  project2  (continuity wins)",
+        "  body: 'typoを直した' + git_repo: project1 + recent: []  →  project1  (context wins, body is vague)",
+        "",
+        f"Known existing projects: [{known_list}] — match spelling when a project name fits.",
+        "Set project to null only if all three levels leave it genuinely unclear.",
+        "",
+        "## Output Rules",
+        "- Write summary, done, todos, and context fields in natural Japanese.",
+        "- Keep tags compact and machine-oriented.",
+        f"- Return ONLY strict JSON: {schema}",
+    ]
+
+    return "\n".join(lines)
 
 
 def event_fingerprint(event: dict[str, Any]) -> str:
@@ -317,9 +451,16 @@ def classify_event(
     ollama_url: str,
     timeout: float,
     classified_path: Path = DEFAULT_CLASSIFIED_PATH,
+    events_path: Path = DEFAULT_EVENT_PATH,
 ) -> dict[str, Any]:
     known_projects = get_known_projects(classified_path)
-    prompt = build_classify_prompt(event, known_projects)
+    event_time = parse_timestamp(event.get("created_at")) or datetime.now().astimezone()
+    recent_context = get_recent_context(
+        events_path=events_path,
+        classified_path=classified_path,
+        before_time=event_time,
+    )
+    prompt = build_classify_prompt(event, known_projects, recent_context=recent_context)
     response_text = call_ollama(url=ollama_url, model=model, prompt=prompt, timeout=timeout)
     classification = parse_classification_json(response_text)
     
@@ -434,7 +575,7 @@ def make_static_analysis(mode: str, rows: list[dict[str, Any]]) -> dict[str, Any
         done_items = cls.get("done") if isinstance(cls.get("done"), list) else []
         for item in done_items:
             text = str(item).strip()
-            if text:
+            if text and not is_placeholder(text):
                 done_set.add(text)
         todos = cls.get("todos") if isinstance(cls.get("todos"), list) else []
         for item in todos:
@@ -468,12 +609,19 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
     )
 
 
+_PLACEHOLDER_VALUES = frozenset({
+    # English
+    "none", "null", "undefined", "n/a", "...",
+    # Japanese
+    "無", "無し", "なし", "特になし", "ない", "なし。", "特にない",
+    "(なし)", "(無)", "（なし）", "（無）",
+})
+
+
 def is_placeholder(item: Any) -> bool:
-    """Check if item is a placeholder value (none, None, etc.)"""
     if not isinstance(item, str):
         return False
-    normalized = str(item).strip().lower()
-    return normalized in ("none", "null", "undefined", "n/a", "...")
+    return item.strip().lower() in _PLACEHOLDER_VALUES or item.strip() in _PLACEHOLDER_VALUES
 
 
 def filter_placeholders(items: list[Any]) -> list[Any]:

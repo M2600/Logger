@@ -370,6 +370,7 @@ def start_worker(state: DaemonState) -> threading.Thread:
                     ollama_url=state.settings.ollama_url,
                     timeout=state.settings.timeout,
                     classified_path=state.classified_path,
+                    events_path=state.events_path,
                 )
                 rid = event_fingerprint(event)
                 with state.lock:

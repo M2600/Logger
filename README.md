@@ -154,12 +154,16 @@ The daemon automatically:
 - Compares it against all open tasks
 - Marks matching tasks as complete (high confidence only)
 - Runs in background thread (non-blocking)
+- Generates task/result text for users in Japanese (JSON schema keys stay unchanged)
 
 **3. Manual Completion**
 Explicitly mark a task as complete:
 ```bash
 # Mark specific task
 python log.py done <task-id> --note "Completed in sprint 5"
+
+# Or use a unique ID prefix
+python log.py done 550e8400 --note "Completed in sprint 5"
 
 # Example with task ID from 'next' output
 python log.py done abc123def456 --note "Implemented auth system"
@@ -186,6 +190,8 @@ The system automatically manages tasks:
 | Manual CLI | `done <id>` (alias: `task-complete`) | No | Explicit completion marking |
 | Auto-Detection | Log event normally | Yes | Seamless workflow integration |
 | API Endpoint | POST /tasks/mark-complete | No | Programmatic integration |
+
+`done` の `task-id` は UUID 全体の代わりに先頭プレフィックスも使えます（先頭一致で1件に絞れる場合のみ）。
 
 ### Example Workflow
 

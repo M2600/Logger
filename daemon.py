@@ -238,6 +238,37 @@ class DaemonState:
         
         return task
 
+    def resolve_task_id_prefix(self, task_id_or_prefix: str) -> tuple[Optional[str], list[Task]]:
+        """Resolve exact ID or unique prefix to a single task ID.
+
+        Returns:
+            (resolved_id, candidates)
+            - resolved_id: matched task ID when unique, else None
+            - candidates: ambiguous candidates when multiple matches, else []
+        """
+        query = task_id_or_prefix.strip()
+        if not query:
+            return None, []
+
+        tasks = self.load_tasks()
+        if query in tasks:
+            return query, []
+
+        matches = [tid for tid in tasks.keys() if tid.startswith(query)]
+        if not matches:
+            return None, []
+        if len(matches) == 1:
+            return matches[0], []
+
+        # If only one open task matches, prefer it.
+        open_matches = [tid for tid in matches if tasks[tid].status == "open"]
+        if len(open_matches) == 1:
+            return open_matches[0], []
+
+        candidate_ids = open_matches if open_matches else matches
+        candidates = [tasks[tid] for tid in candidate_ids]
+        return None, candidates
+
     def auto_complete_tasks(self, event: dict[str, Any]) -> list[str]:
         """Auto-detect and mark completed tasks based on event. Returns list of completed task IDs."""
         tasks = self.load_tasks()
@@ -253,7 +284,6 @@ class DaemonState:
         task_list = "\n".join([f"{i}. {t.task_text}" for i, t in enumerate(open_tasks.values())])
         
         # Create prompt for LLM to check if any tasks are completed
-        # Use English for better model consistency, then parse JSON
         prompt = (
             "I have the following list of open tasks:\n"
             f"{task_list}\n\n"
@@ -261,11 +291,11 @@ class DaemonState:
             f'"{event_body}"\n\n'
             "Analyze this new event and determine which (if any) of the open tasks have been completed or resolved by this event.\n"
             "Return ONLY a valid JSON response (no markdown, no code blocks) with this exact format:\n"
-            '{"completed_task_indices": [0, 2], "confidence": 0.95, "reason": "Brief explanation in English"}\n'
+            '{"completed_task_indices": [0, 2], "confidence": 0.95, "reason": "日本語での簡潔な理由"}\n'
             "Guidelines:\n"
             "- completed_task_indices: array of indices (0-based) of completed tasks, or empty array if none\n"
             "- confidence: float between 0 and 1 representing your confidence level\n"
-            "- reason: brief explanation of why these tasks are marked complete\n"
+            "- reason: brief explanation in Japanese of why these tasks are marked complete\n"
             "- Only include task indices where you have HIGH confidence (>0.8) that the task is actually completed.\n"
             "- Return ONLY the JSON object, no additional text, no code blocks, no markdown."
         )
@@ -796,8 +826,24 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
 
     @app.post("/tasks/mark-complete")
     def mark_task_complete(req: MarkTaskCompleteRequest) -> dict[str, Any]:
+        resolved_task_id, candidates = state.resolve_task_id_prefix(req.task_id)
+        if candidates:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "Task ID prefix is ambiguous",
+                    "prefix": req.task_id,
+                    "candidates": [
+                        {"id": t.id, "task_text": t.task_text, "status": t.status}
+                        for t in candidates
+                    ],
+                },
+            )
+        if not resolved_task_id:
+            raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
+
         task = state.update_task(
-            task_id=req.task_id,
+            task_id=resolved_task_id,
             status="completed",
             completed_at=now_iso(),
             note=req.note,
@@ -805,7 +851,11 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
         )
         if not task:
             raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
-        return {"task": task.to_dict(), "warnings": build_warnings(state)}
+        return {
+            "task": task.to_dict(),
+            "resolved_task_id": resolved_task_id,
+            "warnings": build_warnings(state),
+        }
 
     return app
 

@@ -1146,6 +1146,7 @@ def parse_task_complete_args(argv: list[str]) -> argparse.Namespace:
             "  1. Get task ID from 'python log.py next' command\n"
             "  2. Mark it complete: python log.py done <id>\n"
             "  3. Optionally add a note describing what you did\n"
+            "  ※ task_id はUUID全体でも先頭プレフィックスでも可（1件に絞れる場合のみ）\n"
             "\n"
             "EXAMPLES:\n"
             "  # Simple completion\n"
@@ -1179,7 +1180,7 @@ def parse_task_complete_args(argv: list[str]) -> argparse.Namespace:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("task_id", help="Task ID to mark as complete")
+    parser.add_argument("task_id", help="Task ID or unique prefix to mark as complete")
     parser.add_argument("--note", default="", help="Optional note about completion")
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
@@ -1226,7 +1227,9 @@ def mark_task_complete(args: argparse.Namespace) -> int:
     
     data = response.json()
     task = data.get("task", {})
-    print(f"✓ タスク完了: {task.get('task_text', args.task_id)}", file=sys.stderr)
+    resolved_task_id = str(data.get("resolved_task_id", "")).strip()
+    id_suffix = f" (id: {resolved_task_id})" if resolved_task_id else ""
+    print(f"✓ タスク完了: {task.get('task_text', args.task_id)}{id_suffix}", file=sys.stderr)
     print_warnings(data)
     return 0
 

@@ -279,6 +279,10 @@ def build_classify_prompt(event: dict[str, Any], known_projects: list[str]) -> s
         "Use context information (git_repo, window, page_title, cwd) as supplementary hints only.\n"
         "Git repository name is the most reliable context signal when available.\n"
         "Return null for project only if genuinely unclear from all available information.\n\n"
+        "Language rules:\n"
+        "- Write summary/done/todos/context in natural Japanese.\n"
+        "- Keep tags machine-oriented and compact (no need to force Japanese translation).\n"
+        "- Keep JSON keys and schema exactly as specified.\n\n"
         f"Known projects: [{known_list}]\n"
         f"Expected JSON schema: {schema}\n\n"
         f"Log details:\n"
@@ -444,8 +448,9 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
     if mode == "todo":
         schema = '{"todos":[{"task":"...","priority":1,"context":"..."}]}'
         return (
-            "Refine this pre-aggregated todo list into a concise, deduplicated actionable list. "
-            "Answer in Japanese."
+            "Refine this pre-aggregated todo list into a concise, deduplicated actionable list.\n"
+            "Write task/context content in natural Japanese.\n"
+            "Keep JSON keys and schema exactly as specified.\n"
             "Return strict JSON only.\n"
             f"Project: {project}\n"
             f"Expected JSON schema: {schema}\n"
@@ -453,8 +458,9 @@ def build_report_llm_prompt(mode: str, project: str, static_analysis: dict[str, 
         )
     schema = '{"done":["..."],"next_actions":["..."],"risks":["..."]}'
     return (
-        "Refine this pre-aggregated progress summary into clean professional status bullets. "
-        "Answer in Japanese. "
+        "Refine this pre-aggregated progress summary into clean professional status bullets.\n"
+        "Write done/next_actions/risks content in natural Japanese.\n"
+        "Keep JSON keys and schema exactly as specified.\n"
         "Return strict JSON only.\n"
         f"Project: {project}\n"
         f"Expected JSON schema: {schema}\n"

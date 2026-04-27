@@ -260,20 +260,63 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Core-Stream client (default: send one event to daemon)",
         epilog=(
-            "subcommands:\n"
-            "  report    request progress report from daemon\n"
-            "  next      request todo list from daemon\n"
-            "  settings  update daemon AI setting\n"
-            "  status    check daemon health and state\n"
-            "  backfill  retry classification of unclassified events\n\n"
-            "examples:\n"
-            "  python log.py \"fix docker bug\"\n"
-            "  python log.py --gui\n"
+            "QUICK START:\n"
+            "  Send an event:          python log.py \"your message here\"\n"
+            "  View daily summary:     python log.py report --period today\n"
+            "  View pending tasks:     python log.py next\n"
+            "  Mark task complete:     python log.py done <task-id>\n"
+            "\n"
+            "MAIN COMMANDS (subcommands):\n"
+            "  report       Generate report from classified events\n"
+            "  next         Extract and view uncompleted tasks\n"
+            "  done         Mark a task as completed (alias: task-complete)\n"
+            "  settings     Enable/disable AI (on|off)\n"
+            "  status       Check daemon health\n"
+            "  backfill     Reclassify unclassified events\n"
+            "  retry-send   Resend pending events\n"
+            "\n"
+            "OPTIONS:\n"
+            "  --shot            Capture screenshot (enabled by default)\n"
+            "  --gui             Use GUI input instead of command line\n"
+            "  --stdin           Read event from stdin\n"
+            "  --config-file     Load config from JSON file\n"
+            "  --daemon-url      Connect to remote daemon (default: localhost:8765)\n"
+            "  --api-key         Set API key for authenticated daemon\n"
+            "\n"
+            "CONFIGURATION:\n"
+            "  Config file:  ~/.logger/client.json (auto-loaded if exists)\n"
+            "  Env vars:     LOGGER_DAEMON_URL, LOGGER_API_KEY\n"
+            "  Priority:     CLI args > config file > environment > defaults\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Send event\n"
+            "  python log.py \"fixed database bug\"\n"
+            "\n"
+            "  # Get tasks and view options\n"
+            "  python log.py next --period week\n"
+            "  python log.py next --help\n"
+            "\n"
+            "  # Mark task complete\n"
+            "  python log.py done abc123 --note \"Deployed to prod\"\n"
+            "\n"
+            "  # Generate report\n"
             "  python log.py report --period today --format md\n"
-            "  python log.py next --llm never --format json\n"
+            "\n"
+            "  # Use GUI\n"
+            "  python log.py --gui\n"
+            "\n"
+            "  # Enable AI for classification\n"
             "  python log.py settings --ai on\n"
-            "  python log.py status\n"
-            "  python log.py backfill"
+            "\n"
+            "DOCUMENTATION:\n"
+            "  User guide:     README.md (Task Completion section)\n"
+            "  Configuration:  CONFIG.md\n"
+            "  Architecture:   PLAN.md\n"
+            "\n"
+            "SUPPORT:\n"
+            "  Check daemon status:    python log.py status\n"
+            "  View specific help:     python log.py <command> -h\n"
+            "  See full documentation: python log.py -h"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -326,8 +369,45 @@ def parse_log_args(argv: list[str]) -> argparse.Namespace:
 
 def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
     label = "report" if mode == "report" else "next(todo)"
+    description = (
+        "Core-Stream report: Generate summary of classified events"
+        if mode == "report"
+        else "Core-Stream next: Extract and view pending tasks"
+    )
+    epilog = (
+        "REPORT EXAMPLES:\n"
+        "  # Daily summary\n"
+        "  python log.py report --period today\n"
+        "\n"
+        "  # Weekly summary in JSON\n"
+        "  python log.py report --period week --format json\n"
+        "\n"
+        "  # Custom date range\n"
+        "  python log.py report --period range --from-date 2025-01-01 --to-date 2025-01-31\n"
+        "\n"
+        "  # Save both markdown and JSON\n"
+        "  python log.py report --period today --format both\n"
+        if mode == "report"
+        else
+        "NEXT/TASKS EXAMPLES:\n"
+        "  # View today's pending tasks\n"
+        "  python log.py next --period today\n"
+        "\n"
+        "  # View weekly tasks in JSON\n"
+        "  python log.py next --period week --format json\n"
+        "\n"
+        "  # Mark tasks complete\n"
+        "  python log.py next  # Get task IDs\n"
+        "  python log.py done <id> --note \"Done\"\n"
+        "\n"
+        "  # View without AI refinement\n"
+        "  python log.py next --llm never\n"
+        )
+    
     parser = argparse.ArgumentParser(
-        description=f"Core-Stream {label}: request /reports/generate from daemon"
+        description=description,
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
@@ -361,7 +441,36 @@ def parse_report_args(argv: list[str], mode: str) -> argparse.Namespace:
 
 
 def parse_settings_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Core-Stream settings: update daemon runtime settings")
+    parser = argparse.ArgumentParser(
+        description="Core-Stream settings: update daemon runtime settings",
+        epilog=(
+            "QUICK START:\n"
+            "  Enable AI classification:   python log.py settings --ai on\n"
+            "  Disable AI classification:  python log.py settings --ai off\n"
+            "\n"
+            "USAGE:\n"
+            "  Use this command to enable/disable AI-based event classification\n"
+            "  on the daemon at runtime without restarting.\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Enable AI (events will be classified with LLM)\n"
+            "  python log.py settings --ai on\n"
+            "\n"
+            "  # Disable AI (events saved as-is without classification)\n"
+            "  python log.py settings --ai off\n"
+            "\n"
+            "  # Check status after setting\n"
+            "  python log.py status\n"
+            "\n"
+            "REQUIREMENTS:\n"
+            "  - Ollama running: ollama serve\n"
+            "  - Model installed: ollama pull gemma2\n"
+            "\n"
+            "DOCUMENTATION:\n"
+            "  Configuration:  CONFIG.md"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
@@ -387,7 +496,33 @@ def parse_settings_args(argv: list[str]) -> argparse.Namespace:
 
 
 def parse_status_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Core-Stream status: check daemon health and state")
+    parser = argparse.ArgumentParser(
+        description="Core-Stream status: check daemon health and state",
+        epilog=(
+            "QUICK START:\n"
+            "  Check daemon status:  python log.py status\n"
+            "\n"
+            "USAGE:\n"
+            "  Shows daemon uptime, configuration, AI status, and statistics.\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Text output (default)\n"
+            "  python log.py status\n"
+            "\n"
+            "  # JSON output for scripting\n"
+            "  python log.py status --format json\n"
+            "\n"
+            "  # Check remote daemon\n"
+            "  python log.py status --daemon-url http://remote:8765\n"
+            "\n"
+            "TROUBLESHOOTING:\n"
+            "  Daemon not responding?\n"
+            "  - Is daemon running? Check: ps aux | grep daemon.py\n"
+            "  - Is Ollama running? Check: ollama serve\n"
+            "  - Try: python daemon.py to start daemon\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
@@ -413,7 +548,37 @@ def parse_status_args(argv: list[str]) -> argparse.Namespace:
 
 
 def parse_backfill_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Core-Stream backfill: retry classification of unclassified events")
+    parser = argparse.ArgumentParser(
+        description="Core-Stream backfill: retry classification of unclassified events",
+        epilog=(
+            "QUICK START:\n"
+            "  Reclassify unclassified events:  python log.py backfill\n"
+            "\n"
+            "USAGE:\n"
+            "  Finds all unclassified events in the store and attempts to\n"
+            "  classify them using the daemon's AI worker.\n"
+            "\n"
+            "WHEN TO USE:\n"
+            "  - After enabling AI (python log.py settings --ai on)\n"
+            "  - After fixing configuration or Ollama model\n"
+            "  - To retry failed classifications\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Reclassify all unclassified events\n"
+            "  python log.py backfill\n"
+            "\n"
+            "  # Check status before and after\n"
+            "  python log.py status\n"
+            "  python log.py backfill\n"
+            "  python log.py status\n"
+            "\n"
+            "PREREQUISITES:\n"
+            "  - Daemon running: python daemon.py\n"
+            "  - AI enabled: python log.py settings --ai on\n"
+            "  - Ollama running: ollama serve\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
@@ -917,7 +1082,35 @@ def run_retry_send(args: argparse.Namespace) -> int:
 
 
 def parse_retry_send_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Core-Stream retry-send: resend pending events")
+    parser = argparse.ArgumentParser(
+        description="Core-Stream retry-send: resend pending events",
+        epilog=(
+            "QUICK START:\n"
+            "  Retry sending pending events:  python log.py retry-send\n"
+            "\n"
+            "USAGE:\n"
+            "  Finds all pending events that failed to send and retries them.\n"
+            "  Used with --fire-and-forget mode when daemon was unavailable.\n"
+            "\n"
+            "WHEN TO USE:\n"
+            "  - After daemon was offline\n"
+            "  - After network connection restored\n"
+            "  - After fixing configuration issues\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Retry all pending events\n"
+            "  python log.py retry-send\n"
+            "\n"
+            "  # Check pending events status\n"
+            "  cat ~/.logger/pending_events.jsonl | wc -l\n"
+            "\n"
+            "PENDING EVENTS:\n"
+            "  Location: ~/.logger/pending_events.jsonl\n"
+            "  Created when using: --fire-and-forget flag\n"
+            "  Results logged to: ~/.logger/last_event.log\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
     parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
@@ -941,9 +1134,106 @@ def parse_retry_send_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def parse_task_complete_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Core-Stream done/task-complete: mark a task as complete",
+        epilog=(
+            "QUICK START:\n"
+            "  Mark task complete:  python log.py done abc123\n"
+            "  With note:          python log.py done abc123 --note \"Deployed\"\n"
+            "\n"
+            "USAGE:\n"
+            "  1. Get task ID from 'python log.py next' command\n"
+            "  2. Mark it complete: python log.py done <id>\n"
+            "  3. Optionally add a note describing what you did\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Simple completion\n"
+            "  python log.py done 550e8400-e29b-41d4-a716-446655440000\n"
+            "\n"
+            "  # With completion note\n"
+            "  python log.py done abc123 --note \"Fixed in sprint 5\"\n"
+            "\n"
+            "  # Remote daemon with authentication\n"
+            "  python log.py done abc123 \\\n"
+            "    --daemon-url http://remote.server:8765 \\\n"
+            "    --api-key my-secret-key \\\n"
+            "    --note \"Completed\"\n"
+            "\n"
+            "OPTIONS:\n"
+            "  --note TEXT         Optional note about completion\n"
+            "  --daemon-url URL    Remote daemon URL (default: localhost:8765)\n"
+            "  --api-key KEY       API key if daemon requires authentication\n"
+            "  --config-file FILE  Load config from JSON file\n"
+            "\n"
+            "GETTING TASK IDS:\n"
+            "  $ python log.py next\n"
+            "  - [ ] Fix database connection (...) (id: 550e8400-e29b-41d4-a716-446655440000)\n"
+            "  - [ ] Implement user auth (...) (id: abc123-def456-ghi789-jkl012)\n"
+            "\n"
+            "  Use the ID shown in '(id: ...)' to mark tasks complete.\n"
+            "\n"
+            "DOCUMENTATION:\n"
+            "  Task tracking guide: README.md (Section 3.5)\n"
+            "  Configuration:       CONFIG.md"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("task_id", help="Task ID to mark as complete")
+    parser.add_argument("--note", default="", help="Optional note about completion")
+    parser.add_argument("--config-file", type=str, default=None, help="Load settings from config file (CLI args override)")
+    parser.add_argument("--daemon-url", default=None, help="Daemon base URL")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for authenticated daemon")
+    parser.add_argument("--timeout", type=float, default=None, help="POST timeout seconds")
+    
+    args = parser.parse_args(argv[1:])
+    
+    # Priority: CLI arg > config file > default
+    if args.config_file:
+        config_data = load_client_config(args.config_file)
+    else:
+        config_file, config_data = _get_client_config_or_default()
+    
+    if args.daemon_url is None:
+        args.daemon_url = config_data.get('daemon_url', DEFAULT_DAEMON_URL)
+    if args.api_key is None:
+        args.api_key = config_data.get('api_key')
+    if args.timeout is None:
+        args.timeout = config_data.get('timeout', 30.0)
+    
+    return args
+
+
+def mark_task_complete(args: argparse.Namespace) -> int:
+    url = args.daemon_url.rstrip("/") + "/tasks/mark-complete"
+    payload = {
+        "task_id": args.task_id,
+        "note": args.note,
+    }
+    debug_log(args, f"marking task complete at {url}")
+    try:
+        response = requests.post(url, json=payload, headers=get_request_headers(args), timeout=args.timeout)
+    except requests.RequestException as exc:
+        print(f"failed to mark task complete: {exc}", file=sys.stderr)
+        return 1
+    if response.status_code != 200:
+        print(f"daemon error: HTTP {response.status_code}", file=sys.stderr)
+        try:
+            print(f"  {response.json()}", file=sys.stderr)
+        except ValueError:
+            print(f"  {response.text[:300]}", file=sys.stderr)
+        return 1
+    
+    data = response.json()
+    task = data.get("task", {})
+    print(f"✓ Task marked as complete: {task.get('task_text', args.task_id)}", file=sys.stderr)
+    print_warnings(data)
+    return 0
+
+
 def _find_subcommand(argv: list[str]) -> str | None:
     """Find subcommand in argv at any position."""
-    subcommands = {"report", "next", "settings", "status", "backfill", "retry-send"}
+    subcommands = {"report", "next", "settings", "status", "backfill", "retry-send", "task-complete", "done"}
     for arg in argv[1:]:
         if arg in subcommands:
             return arg
@@ -991,6 +1281,8 @@ def main(argv: list[str]) -> int:
         return run_backfill(parse_backfill_args(cleaned_argv))
     if subcommand == "retry-send":
         return run_retry_send(parse_retry_send_args(cleaned_argv))
+    if subcommand in {"task-complete", "done"}:
+        return mark_task_complete(parse_task_complete_args(cleaned_argv))
     return post_event(parse_log_args(cleaned_argv))
 
 

@@ -14,6 +14,7 @@ import requests
 DEFAULT_EVENT_PATH = Path.home() / ".logger" / "events.jsonl"
 DEFAULT_CLASSIFIED_PATH = Path.home() / ".logger" / "classified.jsonl"
 DEFAULT_JOBS_PATH = Path.home() / ".logger" / "jobs.jsonl"
+DEFAULT_TASKS_PATH = Path.home() / ".logger" / "tasks.jsonl"
 DEFAULT_REPORT_DIR = Path.home() / ".logger" / "reports"
 DEFAULT_SCREENSHOT_DIR = Path.home() / ".logger" / "screenshots"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
@@ -568,7 +569,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
                         if context:
                             suffix_parts.append(context)
                         suffix = f" ({' / '.join(suffix_parts)})" if suffix_parts else ""
-                        lines.append(f"- [ ] {task}{suffix}")
+                        task_id = str(item.get("id", "")).strip()
+                        id_suffix = f" (id: {task_id})" if task_id else ""
+                        lines.append(f"- [ ] {task}{suffix}{id_suffix}")
                     else:
                         text = str(item).strip()
                         if text:

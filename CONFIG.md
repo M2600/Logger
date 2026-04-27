@@ -364,6 +364,67 @@ curl http://localhost:8765/health
 
 ---
 
+## Task Completion Configuration
+
+### Task Tracking Storage
+
+Tasks are automatically stored in `~/.logger/tasks.jsonl`. No additional configuration needed.
+
+### CLI Options for Task Management
+
+```bash
+# View tasks
+python log.py next --period week
+
+# Mark task as complete
+python log.py task-complete <task-id> --note "Optional note"
+
+# With custom daemon URL
+python log.py task-complete <task-id> --daemon-url http://remote:8765
+
+# With authentication
+python log.py task-complete <task-id> --api-key secret-key
+
+# Combine options
+python log.py task-complete <task-id> \
+  --daemon-url http://remote:8765 \
+  --api-key secret \
+  --note "Completed in sprint 5"
+```
+
+### Configuration File Support
+
+Add to `~/.logger/client.json`:
+```json
+{
+  "daemon_url": "http://localhost:8765",
+  "api_key": "optional-secret",
+  "timeout": 30.0
+}
+```
+
+Environment variables:
+```bash
+export LOGGER_DAEMON_URL="http://localhost:8765"
+export LOGGER_API_KEY="optional-secret"
+```
+
+### Auto-Detection Configuration
+
+Auto-detection of completed tasks happens automatically when:
+- AI is enabled: `python log.py settings --ai on`
+- Ollama is running: `ollama serve`
+- New events are logged: `python log.py "event text"`
+
+To disable auto-detection:
+```bash
+python log.py settings --ai off
+# Then use manual completion:
+python log.py task-complete <task-id>
+```
+
+---
+
 ## Examples Included in Repository
 
 - `daemon.config.example.json` - Daemon configuration template

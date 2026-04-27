@@ -389,7 +389,7 @@ analysis_runs.jsonl
 - ✅ 空引数フィルタリングと検証
 - ✅ バックグラウンドスレッド送信（thread.join で完了待機）
 - ✅ debug ログ出力
-- ✅ サブコマンド: status / report / backfill / next / settings
+- ✅ サブコマンド: status / report / backfill / next / settings / task-complete
 - ✅ ローカルタイムゾーン対応
 
 **Daemon (`daemon.py`):**
@@ -400,12 +400,113 @@ analysis_runs.jsonl
 - ✅ /health エンドポイント（状態・warnings 表示）
 - ✅ /analyze/backfill エンドポイント（手動再処理）
 - ✅ /reports/generate エンドポイント（レポート生成）
+- ✅ /tasks/mark-complete エンドポイント（手動タスク完了報告）
+- ✅ タスク自動抽出・永続化（next コマンド時）
+- ✅ タスク自動完了判定（新規イベント受信時の LLM 分析）
 
 **LLM 分類:**
 - ✅ GUI 入力時のウィンドウ優先プロンプト
 - ✅ エラーの一時的/永続的判定
 - ✅ 指数バックオフ再試行（最大3回）
 - ✅ オプションのAPI キー認証（Bearer token）
+- ✅ タスク完了判定プロンプト（新規イベント × 既存タスク）
+
+---
+
+## 12.5. Task Completion Tracking System
+
+### 設計
+- **目的:** ユーザーが記録したイベントから、タスク完了を自動/手動で追跡する
+- **ストレージ:** `~/.logger/tasks.jsonl` に JSONL 形式で永続化
+- **タスク状態:** open / completed
+- **検出方式:** 
+  1. 自動検出：新しいイベント受信時、LLM が既存タスクとの一致度を判定 → 確度高い場合は自動マーク
+  2. 手動報告：CLI から直接タスク完了を指定
+
+### 実装詳細
+
+**Daemon（`daemon.py`）:**
+- `Task` dataclass：タスク情報管理（id, task_text, extracted_at, status, completed_at, completed_event_id, note, completion_reason）
+- `~/.logger/tasks.jsonl`：タスク永続化ストア（JSONL形式）
+- `DaemonState.load_tasks()` / `save_task()` / `update_task()`：タスク I/O メソッド
+- `DaemonState.auto_complete_tasks(event)`：イベント受信時の自動判定（背景スレッド実行）
+- `POST /tasks/mark-complete`：手動完了報告エンドポイント（request: task_id, note）
+- `/reports/generate` 拡張：`next` モード時に自動抽出したタスクを `tasks.jsonl` に保存（重複排除）
+
+**Client（`log.py`）:**
+- `task-complete <task-id> [--note NOTE]` サブコマンド
+- `parse_task_complete_args()`：引数パース
+- `mark_task_complete()`：実行ロジック
+- `/tasks/mark-complete` エンドポイントを呼び出し
+
+**Core Engine（`core_stream_engine.py`）:**
+- `DEFAULT_TASKS_PATH` 定数追加（`~/.logger/tasks.jsonl`）
+
+### ユースケース
+
+1. **タスク抽出**
+   - ユーザーが `python log.py next --period week` を実行
+   - LLM が「未完了タスク」を抽出
+   - Daemon が `tasks.jsonl` に自動保存（UUID生成、重複チェック）
+
+2. **自動検出による完了判定**
+   - ユーザーが作業ログを送信: `python log.py "Fixed database connection timeout"`
+   - Daemon が新しいイベント受信
+   - 背景スレッドで `auto_complete_tasks()` 実行
+   - LLM が「database connection timeout」タスクとの一致度を判定
+   - 確度が高い場合（>0.8）自動的に `status: completed` にマーク
+
+3. **手動完了報告**
+   - ユーザーが明示的に: `python log.py task-complete task-id-123 --note "Done in sprint 5"`
+   - CLI から `/tasks/mark-complete` エンドポイントを呼び出し
+   - タスク情報を更新（completed_at, completed_event_id, note, completion_reason: manual）
+
+### タスクデータ形式
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "task_text": "Fix database connection timeout",
+  "extracted_at": "2025-01-15T10:30:00+09:00",
+  "status": "completed",
+  "completed_at": "2025-01-15T14:22:30+09:00",
+  "completed_event_id": "evt-abc123def",
+  "note": "Fixed in v1.2.1",
+  "completion_reason": "auto"
+}
+```
+
+### 自動判定プロンプト
+
+```
+I have the following list of open tasks:
+- Fix database connection timeout
+- Implement user authentication
+- Add rate limiting
+
+A new event just occurred:
+"Successfully resolved the database connection timeout issue by upgrading connection pool size"
+
+Analyze this new event and determine which (if any) tasks have been completed.
+Return JSON: {"completed_task_indices": [0], "confidence": 0.95, "notes": "..."}
+Only include tasks where confidence > 0.8.
+```
+
+### 重複排除ロジック
+
+`next` コマンドから複数回抽出されるタスクは、既存タスクと text-lower で比較して重複チェック。
+同一タスク（status: open）が存在する場合は新規保存せず。
+
+### 非ブロッキング実装
+
+自動判定は背景スレッドで実行：
+```python
+if state.settings.ai_enabled:
+    def _check_tasks():
+        state.auto_complete_tasks(event)
+    threading.Thread(target=_check_tasks, daemon=True).start()
+```
+メインの POST /events は即座に 200 OK を返却（タスク判定を待たない）。
 
 ---
 

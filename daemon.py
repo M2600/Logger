@@ -27,6 +27,7 @@ from core_stream_engine import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_REPORT_DIR,
     DEFAULT_SCREENSHOT_DIR,
+    DEFAULT_TASKS_PATH,
     append_jsonl,
     build_report_payload,
     classify_event,
@@ -64,6 +65,49 @@ class ReportRequest(BaseModel):
     llm: Literal["never", "auto", "always"] = "auto"
     llm_threshold: int = 60
     save: bool = True
+
+
+class MarkTaskCompleteRequest(BaseModel):
+    task_id: str
+    note: str = ""
+
+
+@dataclass
+class Task:
+    """Represents a task extracted from events"""
+    id: str
+    task_text: str
+    extracted_at: str
+    status: Literal["open", "completed"] = "open"
+    completed_at: Optional[str] = None
+    completed_event_id: Optional[str] = None
+    note: str = ""
+    completion_reason: Literal["manual", "auto"] = "manual"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "task_text": self.task_text,
+            "extracted_at": self.extracted_at,
+            "status": self.status,
+            "completed_at": self.completed_at,
+            "completed_event_id": self.completed_event_id,
+            "note": self.note,
+            "completion_reason": self.completion_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Task":
+        return cls(
+            id=data["id"],
+            task_text=data["task_text"],
+            extracted_at=data["extracted_at"],
+            status=data.get("status", "open"),
+            completed_at=data.get("completed_at"),
+            completed_event_id=data.get("completed_event_id"),
+            note=data.get("note", ""),
+            completion_reason=data.get("completion_reason", "manual"),
+        )
 
 
 @dataclass
@@ -117,6 +161,7 @@ class DaemonState:
         events_path: Path,
         classified_path: Path,
         jobs_path: Path,
+        tasks_path: Path,
         reports_dir: Path,
         screenshot_dir: Path,
         settings: RuntimeSettings,
@@ -124,6 +169,7 @@ class DaemonState:
         self.events_path = events_path
         self.classified_path = classified_path
         self.jobs_path = jobs_path
+        self.tasks_path = tasks_path
         self.reports_dir = reports_dir
         self.screenshot_dir = screenshot_dir
         self.settings = settings
@@ -149,6 +195,118 @@ class DaemonState:
         }
         append_jsonl(self.jobs_path, payload)
 
+    def load_tasks(self) -> dict[str, Task]:
+        """Load all tasks from tasks.jsonl"""
+        tasks = {}
+        for item in load_jsonl(self.tasks_path):
+            try:
+                task = Task.from_dict(item)
+                tasks[task.id] = task
+            except Exception:
+                pass
+        return tasks
+
+    def save_task(self, task: Task) -> None:
+        """Append task to tasks.jsonl"""
+        append_jsonl(self.tasks_path, task.to_dict())
+
+    def update_task(self, task_id: str, status: str, completed_at: Optional[str] = None, 
+                   completed_event_id: Optional[str] = None, note: str = "", 
+                   completion_reason: str = "manual") -> Optional[Task]:
+        """Update task status by rewriting entire tasks.jsonl"""
+        tasks = self.load_tasks()
+        if task_id not in tasks:
+            return None
+        
+        task = tasks[task_id]
+        task.status = status
+        if completed_at:
+            task.completed_at = completed_at
+        if completed_event_id:
+            task.completed_event_id = completed_event_id
+        if note:
+            task.note = note
+        task.completion_reason = completion_reason
+        
+        # Rewrite tasks.jsonl with updated task
+        with self.tasks_path.open("w", encoding="utf-8") as f:
+            for t in tasks.values():
+                if t.id == task_id:
+                    f.write(json.dumps(t.to_dict(), ensure_ascii=False) + "\n")
+                else:
+                    f.write(json.dumps(t.to_dict(), ensure_ascii=False) + "\n")
+        
+        return task
+
+    def auto_complete_tasks(self, event: dict[str, Any]) -> list[str]:
+        """Auto-detect and mark completed tasks based on event. Returns list of completed task IDs."""
+        tasks = self.load_tasks()
+        open_tasks = {tid: t for tid, t in tasks.items() if t.status == "open"}
+        if not open_tasks:
+            return []
+        
+        event_body = str(event.get("body", "")).strip()
+        if not event_body:
+            return []
+        
+        # Build task list for LLM
+        task_list = "\n".join([f"- {t.task_text}" for t in open_tasks.values()])
+        
+        # Create prompt for LLM to check if any tasks are completed
+        prompt = (
+            "I have the following list of open tasks:\n"
+            f"{task_list}\n\n"
+            "A new event just occurred:\n"
+            f'"{event_body}"\n\n'
+            "Analyze this new event and determine which (if any) of the open tasks have been completed or resolved by this event.\n"
+            "Return a JSON response with the following format:\n"
+            '{"completed_task_indices": [0, 2], "confidence": 0.95, "notes": "Brief explanation"}\n'
+            "Only include task indices where you have HIGH confidence (>0.8) that the task is actually completed.\n"
+            "If no tasks appear to be completed, return an empty array.\n"
+            "Return ONLY valid JSON, no other text."
+        )
+        
+        try:
+            import requests as req_lib
+            response = req_lib.post(
+                self.settings.ollama_url,
+                json={"model": self.settings.model, "prompt": prompt, "stream": False},
+                timeout=self.settings.timeout,
+            )
+            if response.status_code != 200:
+                return []
+            
+            result = response.json()
+            response_text = str(result.get("response", "")).strip()
+            if response_text.startswith("```"):
+                response_text = response_text.strip()
+                response_text = response_text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            
+            # Parse JSON response
+            import json as json_lib
+            try:
+                parsed = json_lib.loads(response_text)
+                completed_indices = parsed.get("completed_task_indices", [])
+                
+                task_list_items = list(open_tasks.items())
+                completed_ids = []
+                for idx in completed_indices:
+                    if isinstance(idx, int) and 0 <= idx < len(task_list_items):
+                        task_id, task = task_list_items[idx]
+                        self.update_task(
+                            task_id=task_id,
+                            status="completed",
+                            completed_at=now_iso(),
+                            completed_event_id=event.get("id", ""),
+                            note=parsed.get("notes", ""),
+                            completion_reason="auto",
+                        )
+                        completed_ids.append(task_id)
+                return completed_ids
+            except (json_lib.JSONDecodeError, ValueError, TypeError):
+                return []
+        except Exception:
+            return []
 
 def start_worker(state: DaemonState) -> threading.Thread:
     def _run() -> None:
@@ -470,6 +628,13 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
                 event["meta"]["screenshot_error"] = str(exc)
         
         append_jsonl(state.events_path, event)
+        
+        # Auto-detect completed tasks in background (non-blocking)
+        if state.settings.ai_enabled:
+            def _check_tasks():
+                state.auto_complete_tasks(event)
+            threading.Thread(target=_check_tasks, daemon=True).start()
+        
         if state.settings.ai_enabled:
             state.enqueue_job(event, "pending")
             state.analysis_queue.put(event)
@@ -522,6 +687,81 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # Reconcile report output with tasks.jsonl state.
+        # - todo mode: inject task IDs and avoid recreating already completed tasks
+        # - report mode: hide completed tasks from next_actions
+        existing_tasks = state.load_tasks()
+        open_tasks_by_text = {
+            task.task_text.lower(): task for task in existing_tasks.values() if task.status == "open"
+        }
+        completed_task_texts = {
+            task.task_text.lower() for task in existing_tasks.values() if task.status == "completed"
+        }
+        if req.mode == "todo":
+            for project in payload.get("projects", []):
+                if not isinstance(project, dict):
+                    continue
+                analysis = project.get("analysis")
+                if not isinstance(analysis, dict):
+                    continue
+                todos = analysis.get("todos")
+                if not isinstance(todos, list):
+                    continue
+
+                synced_todos: list[dict[str, Any]] = []
+                for todo_item in todos:
+                    if isinstance(todo_item, dict):
+                        task_text = str(todo_item.get("task", "")).strip()
+                        if not task_text:
+                            continue
+                        task_payload = dict(todo_item)
+                    else:
+                        task_text = str(todo_item).strip()
+                        if not task_text:
+                            continue
+                        task_payload = {"task": task_text}
+
+                    key = task_text.lower()
+                    if key in completed_task_texts and key not in open_tasks_by_text:
+                        # User already marked this task completed.
+                        # Keep it out of "next" and do not recreate an open task.
+                        continue
+                    task = open_tasks_by_text.get(key)
+                    if task is None:
+                        task = Task(
+                            id=str(uuid.uuid4()),
+                            task_text=task_text,
+                            extracted_at=now_iso(),
+                            status="open",
+                        )
+                        state.save_task(task)
+                        open_tasks_by_text[key] = task
+
+                    task_payload["id"] = task.id
+                    synced_todos.append(task_payload)
+
+                analysis["todos"] = synced_todos
+        elif req.mode == "report":
+            for project in payload.get("projects", []):
+                if not isinstance(project, dict):
+                    continue
+                analysis = project.get("analysis")
+                if not isinstance(analysis, dict):
+                    continue
+                next_actions = analysis.get("next_actions")
+                if not isinstance(next_actions, list):
+                    continue
+                filtered_next_actions: list[str] = []
+                for item in next_actions:
+                    text = str(item).strip()
+                    if not text:
+                        continue
+                    key = text.lower()
+                    if key in completed_task_texts and key not in open_tasks_by_text:
+                        continue
+                    filtered_next_actions.append(text)
+                analysis["next_actions"] = filtered_next_actions
+
         markdown = render_markdown(payload)
         files: dict[str, str] = {}
         if req.save:
@@ -531,7 +771,21 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
                 markdown=markdown,
                 payload=payload,
             )
+        
         return {"payload": payload, "markdown": markdown, "files": files, "warnings": build_warnings(state)}
+
+    @app.post("/tasks/mark-complete")
+    def mark_task_complete(req: MarkTaskCompleteRequest) -> dict[str, Any]:
+        task = state.update_task(
+            task_id=req.task_id,
+            status="completed",
+            completed_at=now_iso(),
+            note=req.note,
+            completion_reason="manual",
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
+        return {"task": task.to_dict(), "warnings": build_warnings(state)}
 
     return app
 
@@ -540,11 +794,73 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Core-Stream daemon API server",
         epilog=(
-            "endpoints: /health, /settings, /settings/ai, /events, /analyze/backfill, /reports/generate\n"
-            "example: python daemon.py --host 127.0.0.1 --port 8765 --model gemma2 --api-key my-secret-key\n"
-            "or: python daemon.py --config-file ~/.logger/daemon.json\n"
-            "or: python daemon.py (auto-loads ~/.logger/daemon.json if exists)"
+            "QUICK START:\n"
+            "  Local (no auth):        python daemon.py\n"
+            "  Remote (with auth):     python daemon.py --api-key secret-key\n"
+            "  Custom model:           python daemon.py --model mistral\n"
+            "  From config file:       python daemon.py --config-file ~/.logger/daemon.json\n"
+            "\n"
+            "REQUIREMENTS:\n"
+            "  Python 3.9+\n"
+            "  Ollama running:         ollama serve (in another terminal)\n"
+            "  Default model:          gemma2 (or install with: ollama pull gemma2)\n"
+            "\n"
+            "MAIN OPTIONS:\n"
+            "  --host HOST             Bind address (default: 127.0.0.1)\n"
+            "  --port PORT             Bind port (default: 8765)\n"
+            "  --model MODEL           Ollama model name (gemma2, mistral, llama2, etc.)\n"
+            "  --config-file FILE      Load all settings from JSON file\n"
+            "  --ai-enabled            Enable AI classification (default)\n"
+            "  --ai-disabled           Disable AI (process events without LLM)\n"
+            "  --api-key KEY           Require API key for all requests\n"
+            "\n"
+            "STORAGE OPTIONS:\n"
+            "  --events-path PATH      JSONL event store (~/.logger/events.jsonl)\n"
+            "  --classified-path PATH  JSONL classified cache (~/.logger/classified.jsonl)\n"
+            "  --tasks-path PATH       JSONL tasks store (~/.logger/tasks.jsonl)\n"
+            "  --reports-dir DIR       Report output directory (~/.logger/reports)\n"
+            "  --screenshot-dir DIR    Screenshot storage directory (~/.logger/screenshots)\n"
+            "\n"
+            "API ENDPOINTS:\n"
+            "  GET /health             Check daemon status\n"
+            "  GET /settings           Get current settings\n"
+            "  POST /events            Send event to daemon\n"
+            "  POST /tasks/mark-complete Mark a task as complete\n"
+            "  POST /reports/generate  Generate report from events\n"
+            "  POST /analyze/backfill  Reclassify unclassified events\n"
+            "\n"
+            "CONFIGURATION:\n"
+            "  Config file: ~/.logger/daemon.json (auto-loaded if exists)\n"
+            "  Priority:    CLI args > config file > defaults\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  # Start with default settings\n"
+            "  python daemon.py\n"
+            "\n"
+            "  # Start on custom port with Ollama model\n"
+            "  python daemon.py --port 9000 --model mistral\n"
+            "\n"
+            "  # Enable authentication for remote access\n"
+            "  python daemon.py --host 0.0.0.0 --port 8765 --api-key my-secret-key\n"
+            "\n"
+            "  # Load from config file\n"
+            "  python daemon.py --config-file ~/.logger/daemon.json\n"
+            "\n"
+            "  # Disable AI for development\n"
+            "  python daemon.py --ai-disabled\n"
+            "\n"
+            "TROUBLESHOOTING:\n"
+            "  Ollama not running?     Run: ollama serve\n"
+            "  Check status:           curl http://localhost:8765/health\n"
+            "  Port in use?            Change with: python daemon.py --port 9000\n"
+            "  Model not found?        Install with: ollama pull gemma2\n"
+            "\n"
+            "DOCUMENTATION:\n"
+            "  Usage:          README.md\n"
+            "  Configuration:  CONFIG.md\n"
+            "  Architecture:   PLAN.md"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config-file", type=str, default=None, help="Load all settings from JSON config file (CLI args override)")
     parser.add_argument("--host", default=None, help="Bind address")
@@ -556,6 +872,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="JSONL classified cache path",
     )
     parser.add_argument("--jobs-path", default=None, help="JSONL analysis jobs path")
+    parser.add_argument("--tasks-path", default=None, help="JSONL tasks path")
     parser.add_argument("--reports-dir", default=None, help="Report output directory")
     parser.add_argument("--screenshot-dir", default=None, help="Screenshot storage directory")
     parser.add_argument("--model", default=None, help="Ollama model for classification/refine")
@@ -591,6 +908,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.classified_path = config_data.get('classified_path', str(DEFAULT_CLASSIFIED_PATH))
     if args.jobs_path is None:
         args.jobs_path = config_data.get('jobs_path', str(DEFAULT_JOBS_PATH))
+    if args.tasks_path is None:
+        args.tasks_path = config_data.get('tasks_path', str(DEFAULT_TASKS_PATH))
     if args.reports_dir is None:
         args.reports_dir = config_data.get('reports_dir', str(DEFAULT_REPORT_DIR))
     if args.screenshot_dir is None:
@@ -636,6 +955,7 @@ def main(argv: list[str]) -> int:
         events_path=Path(args.events_path).expanduser(),
         classified_path=Path(args.classified_path).expanduser(),
         jobs_path=Path(args.jobs_path).expanduser(),
+        tasks_path=Path(args.tasks_path).expanduser(),
         reports_dir=Path(args.reports_dir).expanduser(),
         screenshot_dir=Path(args.screenshot_dir).expanduser(),
         settings=settings,

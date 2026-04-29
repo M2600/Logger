@@ -347,9 +347,15 @@ class DaemonState:
                                 completion_reason="auto",
                             )
                             completed_ids.append(task_id)
-                
-                if completed_ids:
-                    print(f"[AUTO-COMPLETE] Marked {len(completed_ids)} task(s) as completed: {completed_ids}")
+                            event_snippet = event_body[:80] + ("..." if len(event_body) > 80 else "")
+                            print(
+                                f"[AUTO-COMPLETE] タスク完了: {task.task_text!r}"
+                                f" | id={task_id[:8]}"
+                                f" | confidence={confidence:.2f}"
+                                f" | reason={reason!r}"
+                                f" | event={event_snippet!r}"
+                            )
+
                 return completed_ids
             except (json_lib.JSONDecodeError, ValueError, TypeError) as e:
                 print(f"[DEBUG] JSON parse error: {e}, response_text: {response_text[:200]}")

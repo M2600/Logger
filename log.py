@@ -138,6 +138,49 @@ def get_git_repo_name(cwd: str) -> str:
 
 
 def get_gui_input() -> str:
+    # Linux では GTK (PyGObject) を優先する。fcitx5-gtk により日本語IMEが正しく動作する。
+    # PyGObject が使えない場合は tkinter にフォールバック。
+    if platform.system() == "Linux":
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            gi.require_version("Gdk", "3.0")
+            from gi.repository import Gdk, Gtk
+
+            captured: dict[str, str] = {"value": ""}
+
+            class _InputWindow(Gtk.Window):
+                def __init__(self) -> None:
+                    super().__init__(title="Core-Stream")
+                    self.set_default_size(480, -1)
+                    self.set_keep_above(True)
+                    self.set_resizable(False)
+                    self.set_border_width(8)
+                    entry = Gtk.Entry()
+                    entry.set_placeholder_text("Your thought or update")
+                    entry.connect("activate", self._on_submit)
+                    self.connect("key-press-event", self._on_key)
+                    self.connect("delete-event", lambda *_: Gtk.main_quit())
+                    self.add(entry)
+                    self.show_all()
+                    entry.grab_focus()
+
+                def _on_submit(self, entry: Gtk.Entry) -> None:
+                    captured["value"] = entry.get_text()
+                    Gtk.main_quit()
+
+                def _on_key(self, _widget: Gtk.Widget, event: Gdk.EventKey) -> None:
+                    if event.keyval == Gdk.KEY_Escape:
+                        Gtk.main_quit()
+
+            _InputWindow()
+            Gtk.main()
+            return captured["value"]
+        except Exception:
+            pass
+
+    # tkinter フォールバック
+    os.environ.setdefault("XMODIFIERS", "@im=fcitx5")
     import tkinter as tk
 
     result: dict[str, str] = {"value": ""}
@@ -170,7 +213,7 @@ def get_gui_input() -> str:
         hide_before_close()
         root.destroy()
 
-    root.bind("<Return>", submit)
+    entry.bind("<Return>", submit)
     root.bind("<Escape>", cancel)
     root.mainloop()
     return result["value"]

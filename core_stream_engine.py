@@ -85,11 +85,16 @@ def rebuild_classified_from_jobs(
         if c.get("event_id")
     }
     
-    # Rebuild: keep only entries where latest status is "done"
+    # Rebuild: keep entries where latest job status is "done",
+    # or where there is no job at all (manually written records, e.g. done events).
     valid_entries = []
-    for event_id, status in latest_status.items():
-        if status == "done" and event_id in classified_map:
-            valid_entries.append(classified_map[event_id])
+    for c in classified_rows:
+        event_id = c.get("event_id")
+        if not event_id:
+            continue
+        status = latest_status.get(event_id)
+        if status is None or status == "done":
+            valid_entries.append(c)
     
     # Rewrite classified.jsonl with only valid entries
     classified_path.parent.mkdir(parents=True, exist_ok=True)

@@ -714,31 +714,30 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"## {project['project']}")
         analysis = project["analysis"]
         if payload["mode"] == "todo":
-            lines.append("### Todo")
             todos = analysis.get("todos", [])
-            if todos:
-                for item in todos:
-                    if isinstance(item, dict):
-                        task = str(item.get("task", "")).strip()
-                        if not task:
-                            continue
-                        suffix_parts: list[str] = []
-                        priority = item.get("priority")
-                        if isinstance(priority, int):
-                            suffix_parts.append(f"P{priority}")
-                        context = str(item.get("context", "")).strip()
-                        if context:
-                            suffix_parts.append(context)
-                        suffix = f" ({' / '.join(suffix_parts)})" if suffix_parts else ""
-                        task_id = str(item.get("id", "")).strip()
-                        id_suffix = f" (id: {task_id})" if task_id else ""
-                        lines.append(f"- [ ] {task}{suffix}{id_suffix}")
-                    else:
-                        text = str(item).strip()
-                        if text:
-                            lines.append(f"- [ ] {text}")
-            else:
-                lines.append("- [ ] (none)")
+            if not todos:
+                continue
+            lines.append("### Todo")
+            for item in todos:
+                if isinstance(item, dict):
+                    task = str(item.get("task", "")).strip()
+                    if not task:
+                        continue
+                    suffix_parts: list[str] = []
+                    priority = item.get("priority")
+                    if isinstance(priority, int):
+                        suffix_parts.append(f"P{priority}")
+                    context = str(item.get("context", "")).strip()
+                    if context:
+                        suffix_parts.append(context)
+                    suffix = f" ({' / '.join(suffix_parts)})" if suffix_parts else ""
+                    task_id = str(item.get("id", "")).strip()
+                    id_suffix = f" (id: {task_id})" if task_id else ""
+                    lines.append(f"- [ ] {task}{suffix}{id_suffix}")
+                else:
+                    text = str(item).strip()
+                    if text:
+                        lines.append(f"- [ ] {text}")
             lines.append("")
             continue
 

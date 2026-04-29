@@ -83,6 +83,8 @@ class Task:
     completed_event_id: Optional[str] = None
     note: str = ""
     completion_reason: Literal["manual", "auto"] = "manual"
+    project: str = ""
+    context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +96,8 @@ class Task:
             "completed_event_id": self.completed_event_id,
             "note": self.note,
             "completion_reason": self.completion_reason,
+            "project": self.project,
+            "context": self.context,
         }
 
     @classmethod
@@ -107,6 +111,8 @@ class Task:
             completed_event_id=data.get("completed_event_id"),
             note=data.get("note", ""),
             completion_reason=data.get("completion_reason", "manual"),
+            project=data.get("project", ""),
+            context=data.get("context", {}),
         )
 
 
@@ -754,6 +760,15 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
         completed_task_texts = {
             task.task_text.lower() for task in existing_tasks.values() if task.status == "completed"
         }
+        # プロジェクト名 → context のマップを classified rows から構築
+        project_contexts: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            proj = str(row.get("project", "")).strip()
+            if proj and proj not in project_contexts:
+                ctx = row.get("context")
+                if isinstance(ctx, dict) and ctx:
+                    project_contexts[proj] = ctx
+
         if req.mode == "todo":
             for project in payload.get("projects", []):
                 if not isinstance(project, dict):
@@ -764,6 +779,8 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
                 todos = analysis.get("todos")
                 if not isinstance(todos, list):
                     continue
+                project_name = str(project.get("project", ""))
+                project_ctx = project_contexts.get(project_name, {})
 
                 synced_todos: list[dict[str, Any]] = []
                 for todo_item in todos:
@@ -790,6 +807,8 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
                             task_text=task_text,
                             extracted_at=now_iso(),
                             status="open",
+                            project=project_name,
+                            context=project_ctx,
                         )
                         state.save_task(task)
                         open_tasks_by_text[key] = task
@@ -849,15 +868,52 @@ def build_app(state: DaemonState, auth_config: AuthConfig) -> FastAPI:
         if not resolved_task_id:
             raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
 
+        completed_at = now_iso()
         task = state.update_task(
             task_id=resolved_task_id,
             status="completed",
-            completed_at=now_iso(),
+            completed_at=completed_at,
             note=req.note,
             completion_reason="manual",
         )
         if not task:
             raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
+
+        # done イベントを events.jsonl に追記
+        body = f"done: {task.task_text}"
+        if req.note:
+            body += f" — {req.note}"
+        event = {
+            "id": str(uuid.uuid4()),
+            "type": "thought",
+            "body": body,
+            "source": "cli",
+            "context": task.context,
+            "created_at": completed_at,
+        }
+        append_jsonl(state.events_path, event)
+
+        # LLM なしで classified.jsonl に直接追記（タスクの project/context を引き継ぐ）
+        classified_row = {
+            "record_id": event["id"],
+            "event_id": event["id"],
+            "source_t": event["created_at"],
+            "project": task.project,
+            "body": body,
+            "context": task.context,
+            "classification": {
+                "project": task.project,
+                "summary": body,
+                "done": [task.task_text],
+                "todos": [],
+                "tags": [],
+            },
+            "classified_at": completed_at,
+        }
+        append_jsonl(state.classified_path, classified_row)
+        with state.lock:
+            state.classified_ids.add(event["id"])
+
         return {
             "task": task.to_dict(),
             "resolved_task_id": resolved_task_id,

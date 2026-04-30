@@ -10,5 +10,9 @@
   "classified_path": "~/.logger/classified.jsonl",
   "jobs_path": "~/.logger/jobs.jsonl",
   "reports_dir": "~/.logger/reports",
-  "screenshot_dir": "~/.logger/screenshots"
+  "screenshot_dir": "~/.logger/screenshots",
+  "vectors_path": "~/.logger/vectors.jsonl",
+  "embed_enabled": true,
+  "embed_model": "nomic-embed-text",
+  "embed_url": "http://127.0.0.1:11434/api/embeddings"
 }

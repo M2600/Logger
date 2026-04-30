@@ -22,14 +22,18 @@ from pydantic import BaseModel, Field
 
 from core_stream_engine import (
     DEFAULT_CLASSIFIED_PATH,
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_EMBED_URL,
     DEFAULT_EVENT_PATH,
     DEFAULT_JOBS_PATH,
     DEFAULT_OLLAMA_URL,
     DEFAULT_REPORT_DIR,
     DEFAULT_SCREENSHOT_DIR,
     DEFAULT_TASKS_PATH,
+    DEFAULT_VECTORS_PATH,
     append_jsonl,
     build_report_payload,
+    call_ollama_embed,
     classify_event,
     event_fingerprint,
     filter_period,
@@ -122,6 +126,9 @@ class RuntimeSettings:
     ollama_url: str
     timeout: float
     ai_enabled: bool
+    embed_model: str
+    embed_url: str
+    embed_enabled: bool
 
 
 @dataclass
@@ -170,6 +177,7 @@ class DaemonState:
         tasks_path: Path,
         reports_dir: Path,
         screenshot_dir: Path,
+        vectors_path: Path,
         settings: RuntimeSettings,
     ) -> None:
         self.events_path = events_path
@@ -178,6 +186,7 @@ class DaemonState:
         self.tasks_path = tasks_path
         self.reports_dir = reports_dir
         self.screenshot_dir = screenshot_dir
+        self.vectors_path = vectors_path
         self.settings = settings
         self.lock = threading.Lock()
         self.analysis_queue: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -187,6 +196,11 @@ class DaemonState:
             str(item.get("record_id", "")).strip()
             for item in load_jsonl(self.classified_path)
             if str(item.get("record_id", "")).strip()
+        }
+        self.embedded_ids: set[str] = {
+            f"{item.get('event_id', '')}:{item.get('field', '')}"
+            for item in load_jsonl(self.vectors_path)
+            if item.get("event_id") and item.get("field")
         }
 
     def enqueue_job(self, event: dict[str, Any], status: str, error: str = "") -> None:
@@ -392,6 +406,41 @@ def start_worker(state: DaemonState) -> threading.Thread:
                     append_jsonl(state.classified_path, row)
                     state.classified_ids.add(rid)
                 state.enqueue_job(event, "done")
+
+                if state.settings.embed_enabled:
+                    def _embed(ev: dict[str, Any] = event, r: dict[str, Any] = row) -> None:
+                        event_id = ev.get("id", "")
+                        fields = [
+                            ("body", str(ev.get("body", "")).strip()),
+                            ("summary", str((r.get("classification") or {}).get("summary", "")).strip()),
+                        ]
+                        for field, text in fields:
+                            if not text:
+                                continue
+                            key = f"{event_id}:{field}"
+                            if key in state.embedded_ids:
+                                continue
+                            try:
+                                vector = call_ollama_embed(
+                                    text=text,
+                                    model=state.settings.embed_model,
+                                    url=state.settings.embed_url,
+                                    timeout=state.settings.timeout,
+                                )
+                                record = {
+                                    "event_id": event_id,
+                                    "source_t": ev.get("created_at", ""),
+                                    "field": field,
+                                    "text": text,
+                                    "model": state.settings.embed_model,
+                                    "vector": vector,
+                                    "created_at": now_iso(),
+                                }
+                                append_jsonl(state.vectors_path, record)
+                                state.embedded_ids.add(key)
+                            except Exception as embed_exc:
+                                print(f"[DEBUG] embed error ({field}): {embed_exc}")
+                    threading.Thread(target=_embed, daemon=True).start()
             except Exception as exc:
                 error_msg = str(exc)
                 state.enqueue_job(event, "failed", error_msg)
@@ -1014,7 +1063,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ai-enabled", action="store_true", default=None, help="Enable AI worker (default)")
     parser.add_argument("--ai-disabled", dest="ai_enabled", action="store_false", help="Disable AI worker")
     parser.add_argument("--api-key", type=str, default=None, help="Enable API key authentication (Bearer token)")
-    
+    parser.add_argument("--vectors-path", default=None, help="JSONL vector store path")
+    parser.add_argument("--embed-model", default=None, help="Ollama embedding model (default: nomic-embed-text)")
+    parser.add_argument("--embed-url", default=None, help="Ollama /api/embeddings URL")
+    parser.add_argument("--embed-enabled", action="store_true", default=None, help="Enable vector embedding (default)")
+    parser.add_argument("--embed-disabled", dest="embed_enabled", action="store_false", help="Disable vector embedding")
+
     args = parser.parse_args(argv[1:])
     
     # Priority: CLI arg > config file > default
@@ -1059,7 +1113,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     # Handle ai_enabled specially since it uses action="store_true" with default=None
     if args.ai_enabled is None:
         args.ai_enabled = config_data.get('ai_enabled', True)
-    
+    if args.vectors_path is None:
+        args.vectors_path = config_data.get('vectors_path', str(DEFAULT_VECTORS_PATH))
+    if args.embed_model is None:
+        args.embed_model = config_data.get('embed_model', DEFAULT_EMBED_MODEL)
+    if args.embed_url is None:
+        args.embed_url = config_data.get('embed_url', DEFAULT_EMBED_URL)
+    if args.embed_enabled is None:
+        args.embed_enabled = config_data.get('embed_enabled', True)
+
     return args
 
 
@@ -1082,6 +1144,9 @@ def main(argv: list[str]) -> int:
         ollama_url=args.ollama_url,
         timeout=args.timeout,
         ai_enabled=bool(args.ai_enabled),
+        embed_model=args.embed_model,
+        embed_url=args.embed_url,
+        embed_enabled=bool(args.embed_enabled),
     )
     auth_config = AuthConfig.from_args(args)
     state = DaemonState(
@@ -1091,6 +1156,7 @@ def main(argv: list[str]) -> int:
         tasks_path=Path(args.tasks_path).expanduser(),
         reports_dir=Path(args.reports_dir).expanduser(),
         screenshot_dir=Path(args.screenshot_dir).expanduser(),
+        vectors_path=Path(args.vectors_path).expanduser(),
         settings=settings,
     )
     # On startup, rebuild classified.jsonl to remove stale entries from failed retries

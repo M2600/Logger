@@ -18,6 +18,9 @@ DEFAULT_TASKS_PATH = Path.home() / ".logger" / "tasks.jsonl"
 DEFAULT_REPORT_DIR = Path.home() / ".logger" / "reports"
 DEFAULT_SCREENSHOT_DIR = Path.home() / ".logger" / "screenshots"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_VECTORS_PATH = Path.home() / ".logger" / "vectors.jsonl"
+DEFAULT_EMBED_URL = "http://localhost:11434/api/embeddings"
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 BROWSER_SUFFIXES = [
     "Google Chrome",
@@ -215,6 +218,27 @@ def call_ollama(*, url: str, model: str, prompt: str, timeout: float) -> str:
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Ollama response field is empty")
     return text
+
+
+def call_ollama_embed(*, text: str, model: str, url: str, timeout: float) -> list[float]:
+    try:
+        response = requests.post(
+            url,
+            json={"model": model, "prompt": text},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Ollama embed request failed: {exc}") from exc
+    if response.status_code != 200:
+        raise RuntimeError(f"Ollama embed HTTP {response.status_code}: {response.text[:200]}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Ollama embed returned non-JSON response") from exc
+    vector = payload.get("embedding")
+    if not isinstance(vector, list):
+        raise RuntimeError("Ollama embed response has no embedding field")
+    return vector
 
 
 def strip_code_fence(text: str) -> str:

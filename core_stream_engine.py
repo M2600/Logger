@@ -735,13 +735,14 @@ def render_markdown(payload: dict[str, Any]) -> str:
     lines.append(f"- llm_strategy: {payload['llm_strategy']}")
     lines.append("")
     for project in payload["projects"]:
-        lines.append(f"## {project['project']}")
         analysis = project["analysis"]
         if payload["mode"] == "todo":
             todos = analysis.get("todos", [])
             if not todos:
                 continue
+            lines.append(f"## {project['project']}")
             lines.append("### Todo")
+            project_name = str(project.get("project", "")).strip()
             for item in todos:
                 if isinstance(item, dict):
                     task = str(item.get("task", "")).strip()
@@ -752,7 +753,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
                     if isinstance(priority, int):
                         suffix_parts.append(f"P{priority}")
                     context = str(item.get("context", "")).strip()
-                    if context:
+                    if context and context.lower() != project_name.lower():
                         suffix_parts.append(context)
                     suffix = f" ({' / '.join(suffix_parts)})" if suffix_parts else ""
                     task_id = str(item.get("id", "")).strip()
@@ -765,6 +766,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
             lines.append("")
             continue
 
+        lines.append(f"## {project['project']}")
         lines.append("### Done")
         done = analysis.get("done", [])
         lines.extend(f"- {item}" for item in done if str(item).strip()) if done else lines.append("- (none)")
